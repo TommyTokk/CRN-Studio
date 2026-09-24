@@ -16,7 +16,6 @@ from typing import Any
 
 import streamlit as st
 
-
 MODEL_LIBRARY_KEY = "shapcrn_model_library"
 ACTIVE_MODEL_KEY = "shapcrn_active_model_id"
 UPLOAD_BATCH_KEY = "_shapcrn_upload_batch_ids"
@@ -122,7 +121,9 @@ def remove_model(model_id: str) -> None:
 
     batch = list(st.session_state.get(UPLOAD_BATCH_KEY, []))
     if model_id in batch:
-        st.session_state[UPLOAD_BATCH_KEY] = [item for item in batch if item != model_id]
+        st.session_state[UPLOAD_BATCH_KEY] = [
+            item for item in batch if item != model_id
+        ]
 
     _repair_active_model()
     _sync_compatibility_keys()
@@ -140,7 +141,9 @@ def _repair_active_model() -> None:
     library = st.session_state.get(MODEL_LIBRARY_KEY, {})
     active_id = st.session_state.get(ACTIVE_MODEL_KEY)
     if active_id not in library:
-        st.session_state[ACTIVE_MODEL_KEY] = next(reversed(library), None) if library else None
+        st.session_state[ACTIVE_MODEL_KEY] = (
+            next(reversed(library), None) if library else None
+        )
 
 
 def _sync_compatibility_keys() -> None:

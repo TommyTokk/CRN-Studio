@@ -12,7 +12,6 @@ from ui.components import (
     stat_card,
 )
 
-
 # Shared theme/sidebar/topbar are rendered once by app.py before this page runs.
 
 page_header(

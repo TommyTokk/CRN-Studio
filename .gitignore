@@ -218,3 +218,5 @@ target/
 
 # Jupyter Notebook
 .ipy
+
+tests/*

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-
 LIGHT_PALETTE = {
     # Canvas / surfaces
     "canvas": "#FBF8FF",
@@ -127,7 +126,6 @@ def current_theme() -> str:
     return "dark" if theme == "dark" else "light"
 
 
-
 def apply_global_styles() -> None:
     """Inject the design-system CSS used by every page.
 
@@ -147,41 +145,41 @@ def apply_global_styles() -> None:
             @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
 
             :root {{
-                --canvas: {palette['canvas']};
-                --paper: {palette['paper']};
-                --surface: {palette['surface']};
-                --surface-low: {palette['surface_low']};
-                --surface-mid: {palette['surface_mid']};
-                --well: {palette['well']};
-                --border: {palette['border']};
-                --border-strong: {palette['border_strong']};
-                --text: {palette['text']};
-                --text-soft: {palette['text_soft']};
-                --terracotta: {palette['terracotta']};
-                --terracotta-dark: {palette['terracotta_dark']};
-                --sage: {palette['sage']};
-                --amber: {palette['amber']};
-                --slate: {palette['slate']};
-                --sage-dark: {palette['sage_dark']};
-                --amber-dark: {palette['amber_dark']};
-                --mineral: {palette['mineral']};
-                --error: {palette['error']};
-                --success-bg: {palette['success_bg']};
-                --success-text: {palette['success_text']};
-                --success-border: {palette['success_border']};
-                --terra-bg: {palette['terra_bg']};
-                --terra-text: {palette['terra_text']};
-                --amber-bg: {palette['amber_bg']};
-                --amber-text: {palette['amber_text']};
-                --nav-hover: {palette['nav_hover']};
-                --upload-hover: {palette['upload_hover']};
-                --disabled-bg: {palette['disabled_bg']};
-                --disabled-text: {palette['disabled_text']};
-                --tab-border: {palette['tab_border']};
-                --negative: {palette['negative']};
-                --neutral: {palette['neutral']};
-                --positive: {palette['positive']};
-                color-scheme: {'dark' if current_theme() == 'dark' else 'light'};
+                --canvas: {palette["canvas"]};
+                --paper: {palette["paper"]};
+                --surface: {palette["surface"]};
+                --surface-low: {palette["surface_low"]};
+                --surface-mid: {palette["surface_mid"]};
+                --well: {palette["well"]};
+                --border: {palette["border"]};
+                --border-strong: {palette["border_strong"]};
+                --text: {palette["text"]};
+                --text-soft: {palette["text_soft"]};
+                --terracotta: {palette["terracotta"]};
+                --terracotta-dark: {palette["terracotta_dark"]};
+                --sage: {palette["sage"]};
+                --amber: {palette["amber"]};
+                --slate: {palette["slate"]};
+                --sage-dark: {palette["sage_dark"]};
+                --amber-dark: {palette["amber_dark"]};
+                --mineral: {palette["mineral"]};
+                --error: {palette["error"]};
+                --success-bg: {palette["success_bg"]};
+                --success-text: {palette["success_text"]};
+                --success-border: {palette["success_border"]};
+                --terra-bg: {palette["terra_bg"]};
+                --terra-text: {palette["terra_text"]};
+                --amber-bg: {palette["amber_bg"]};
+                --amber-text: {palette["amber_text"]};
+                --nav-hover: {palette["nav_hover"]};
+                --upload-hover: {palette["upload_hover"]};
+                --disabled-bg: {palette["disabled_bg"]};
+                --disabled-text: {palette["disabled_text"]};
+                --tab-border: {palette["tab_border"]};
+                --negative: {palette["negative"]};
+                --neutral: {palette["neutral"]};
+                --positive: {palette["positive"]};
+                color-scheme: {"dark" if current_theme() == "dark" else "light"};
             }}
 
             html, body, [class*="css"] {{
