@@ -19,7 +19,6 @@ from ui.model_library import (
 )
 from ui.styles import THEME_STATE_KEY, ensure_ui_state
 
-
 PageName = Literal["overview", "kinetics", "importance"]
 
 
@@ -287,7 +286,7 @@ def panel_heading(title: str, subtitle: str = "", icon: str = "") -> None:
 
 def stat_card(
     label: str,
-    value: str | int | float,
+    value: str | float,
     help_text: str,
     accent: Literal["terra", "sage", "amber", "slate"] = "terra",
     chip: str | None = None,
@@ -326,7 +325,7 @@ def placeholder(title: str, copy: str, *, min_height: int = 190) -> None:
 
 def network_legend() -> None:
     st.markdown(
-        f"""
+        """
         <div class="graph-legend">
             <span class="legend-item"><span class="legend-dot" style="background:var(--terracotta)"></span>Species node</span>
             <span class="legend-item"><span class="legend-diamond" style="background:var(--amber)"></span>Reaction node</span>

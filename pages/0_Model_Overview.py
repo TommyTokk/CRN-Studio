@@ -7,8 +7,8 @@ every page through ``st.navigation``.
 
 from __future__ import annotations
 
-from typing import Any
 import hashlib
+from typing import Any
 
 import streamlit as st
 import streamlit.components.v1 as st_components
@@ -48,7 +48,6 @@ from ui.model_library import (
     ensure_model_library,
     sync_uploaded_models,
 )
-
 
 # Used to request exactly one extra rerun when the active parsed model changes.
 # The app shell/sidebar executes before this page body, so without this handshake

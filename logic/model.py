@@ -3,13 +3,11 @@
 Replace the placeholders below with your own ShapCRN/libSBML implementation.
 """
 
-from shapcrn.utils.sbml import io
 import libsbml
+import pandas as pd
+from shapcrn.utils.sbml import io
 
 from .crnt import compute_crn_deficiency
-
-
-import pandas as pd
 
 
 def get_species_dataframe(model: libsbml.Model) -> pd.DataFrame:
