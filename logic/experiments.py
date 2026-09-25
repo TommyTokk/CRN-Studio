@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -19,15 +20,93 @@ from shapcrn.utils.sbml import species as species_ut
 from shapcrn.utils.sbml import utils as sbml_ut
 
 
+PERTURBATION_TRAJECTORY_MEMORY_LIMIT_BYTES = 128 * 1024**2
+PERTURBATION_OUTPUT_ROWS = 100
+PHASE_PLOT_MAX_POINTS = 500
+
+
+@dataclass(frozen=True)
+class PerturbationTrajectoryMetadata:
+    """Stable identity and input settings for one perturbation trajectory."""
+
+    trajectory_id: str
+    combination_index: int
+    level_indices: tuple[int, ...]
+    variations: tuple[tuple[str, float], ...]
+    input_values: tuple[tuple[str, float], ...]
+    label: str
+
+
 @dataclass(frozen=True)
 class PerturbationSweepResult:
-    """Target envelopes produced by a fixed-percentage perturbation sweep."""
+    """Envelopes and full trajectories from a fixed-percentage sweep."""
 
     envelopes: dict[str, pd.DataFrame]
     variation_levels: tuple[float, ...]
     initial_values: dict[str, float]
     species_selections: dict[str, str]
     combination_count: int
+    trajectories: tuple[np.ndarray, ...]
+    trajectory_columns: tuple[str, ...]
+    input_samples: dict[str, tuple[float, ...]]
+    combination_level_indices: tuple[tuple[int, ...], ...]
+    baseline_index: int
+    trajectory_metadata: dict[str, PerturbationTrajectoryMetadata]
+
+
+def estimate_perturbation_trajectory_bytes(
+    combination_count: int,
+    species_count: int,
+    *,
+    output_rows: int = PERTURBATION_OUTPUT_ROWS,
+) -> int:
+    """Estimate bytes required for full float64 perturbation trajectories."""
+    if combination_count < 0:
+        raise ValueError("Combination count must not be negative.")
+    if species_count < 0:
+        raise ValueError("Species count must not be negative.")
+    if output_rows < 1:
+        raise ValueError("Output rows must be at least one.")
+    return int(combination_count) * int(output_rows) * (int(species_count) + 1) * 8
+
+
+def perturbation_trajectory_for_levels(
+    result: PerturbationSweepResult,
+    level_indices: Sequence[int],
+) -> pd.DataFrame:
+    """Return the real sweep trajectory for one combination of level indices."""
+    if not isinstance(result, PerturbationSweepResult):
+        raise TypeError("A PerturbationSweepResult is required.")
+
+    selected_indices_list: list[int] = []
+    for index in level_indices:
+        normalized_index = int(index)
+        if normalized_index != index:
+            raise ValueError("Perturbation level indices must be integers.")
+        selected_indices_list.append(normalized_index)
+    selected_indices = tuple(selected_indices_list)
+    input_count = len(result.input_samples)
+    if len(selected_indices) != input_count:
+        raise ValueError(
+            f"Expected {input_count} perturbation level indices, "
+            f"received {len(selected_indices)}."
+        )
+
+    level_count = len(result.variation_levels)
+    if any(index < 0 or index >= level_count for index in selected_indices):
+        raise ValueError(
+            f"Perturbation level indices must be between 0 and {level_count - 1}."
+        )
+
+    try:
+        combination_index = result.combination_level_indices.index(selected_indices)
+    except ValueError as exc:
+        raise ValueError(
+            "The selected perturbation level combination was not simulated."
+        ) from exc
+
+    trajectory = result.trajectories[combination_index]
+    return pd.DataFrame(trajectory, columns=list(result.trajectory_columns))
 
 
 def simulate(
@@ -62,6 +141,234 @@ def _as_trajectory_frame(values: Any, columns: list[str]) -> pd.DataFrame:
     if frame.empty:
         raise ValueError("The simulation returned no trajectory data.")
     return frame
+
+
+def _selection_id(selection: object) -> str:
+    """Return the species ID represented by a RoadRunner selection."""
+    selection_text = str(selection)
+    if selection_text.startswith("[") and selection_text.endswith("]"):
+        return selection_text[1:-1]
+    return selection_text
+
+
+def prepare_phase_trajectory(
+    trajectory: pd.DataFrame,
+    species_ids: Sequence[str],
+    *,
+    column_selections: Sequence[object] | None = None,
+) -> pd.DataFrame:
+    """Return time and two or three species columns for a phase plot.
+
+    ``column_selections`` preserves the RoadRunner names associated with legacy
+    DataFrames whose columns were replaced by integer labels. Species selections
+    may use either the concentration form (``[S1]``) or the amount form (``S1``).
+    The returned frame contains the original samples without interpolation.
+    """
+    if not isinstance(trajectory, pd.DataFrame) or trajectory.empty:
+        raise ValueError("Phase plot data must be a non-empty DataFrame.")
+
+    selected_species = [str(species_id) for species_id in species_ids]
+    if len(selected_species) not in (2, 3):
+        raise ValueError("Select exactly two or three species for the phase plot.")
+    if len(set(selected_species)) != len(selected_species):
+        raise ValueError("Phase plot species must not contain duplicates.")
+    if any(not species_id for species_id in selected_species):
+        raise ValueError("Phase plot species IDs must not be empty.")
+
+    selections = (
+        list(column_selections)
+        if column_selections is not None
+        else list(trajectory.columns)
+    )
+    if len(selections) != len(trajectory.columns):
+        raise ValueError(
+            "RoadRunner column selections must match the trajectory columns."
+        )
+
+    normalized_selections = [_selection_id(selection) for selection in selections]
+    time_indices = [
+        index
+        for index, selection in enumerate(normalized_selections)
+        if selection.lower() == "time"
+    ]
+    if len(time_indices) != 1:
+        raise ValueError("Phase plot data must contain exactly one time column.")
+
+    selected_indices: dict[str, int] = {}
+    for species_id in selected_species:
+        matches = [
+            index
+            for index, selection in enumerate(normalized_selections)
+            if selection == species_id
+        ]
+        if not matches:
+            raise ValueError(
+                f"Phase plot data does not contain species {species_id!r}."
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Phase plot data contains multiple columns for species {species_id!r}."
+            )
+        selected_indices[species_id] = matches[0]
+
+    phase_data: dict[str, pd.Series] = {}
+    output_columns = [("time", time_indices[0])] + list(selected_indices.items())
+    for output_name, column_index in output_columns:
+        try:
+            phase_data[output_name] = pd.to_numeric(
+                trajectory.iloc[:, column_index],
+                errors="raise",
+            ).reset_index(drop=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Phase plot column {output_name!r} must contain numeric values."
+            ) from exc
+
+    return pd.DataFrame(phase_data)
+
+
+def downsample_phase_trajectory(
+    trajectory: pd.DataFrame,
+    *,
+    max_points: int = PHASE_PLOT_MAX_POINTS,
+) -> pd.DataFrame:
+    """Return at most ``max_points`` evenly spaced rows, including endpoints."""
+    if not isinstance(trajectory, pd.DataFrame) or trajectory.empty:
+        raise ValueError("Phase plot data must be a non-empty DataFrame.")
+    if max_points < 2:
+        raise ValueError("Phase plot maximum points must be at least two.")
+    if len(trajectory) <= max_points:
+        return trajectory.copy()
+
+    sampled_indices = np.linspace(
+        0,
+        len(trajectory) - 1,
+        num=max_points,
+        dtype=int,
+    )
+    return trajectory.iloc[np.unique(sampled_indices)].reset_index(drop=True)
+
+
+def phase_species_intersection(
+    standard_trajectory: pd.DataFrame,
+    standard_column_selections: Sequence[object] | None,
+    sweep_result: PerturbationSweepResult,
+) -> tuple[str, ...]:
+    """Return species available in both the Standard and sweep trajectories."""
+    if not isinstance(standard_trajectory, pd.DataFrame) or standard_trajectory.empty:
+        return ()
+    standard_selections = (
+        list(standard_column_selections)
+        if standard_column_selections is not None
+        else list(standard_trajectory.columns)
+    )
+    if len(standard_selections) != len(standard_trajectory.columns):
+        raise ValueError(
+            "RoadRunner column selections must match the Standard trajectory columns."
+        )
+
+    sweep_species = {
+        _selection_id(selection)
+        for selection in sweep_result.trajectory_columns
+        if _selection_id(selection).lower() != "time"
+    }
+    ordered_standard_species = [
+        _selection_id(selection)
+        for selection in standard_selections
+        if _selection_id(selection).lower() != "time"
+    ]
+    return tuple(
+        species_id
+        for species_id in ordered_standard_species
+        if species_id in sweep_species
+    )
+
+
+def perturbation_trajectories_for_ids(
+    result: PerturbationSweepResult,
+    trajectory_ids: Sequence[str],
+) -> dict[str, pd.DataFrame]:
+    """Return sweep trajectories keyed by their stable perturbation IDs."""
+    if not isinstance(result, PerturbationSweepResult):
+        raise TypeError("A PerturbationSweepResult is required.")
+
+    selected_ids = [str(trajectory_id) for trajectory_id in trajectory_ids]
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("Perturbation trajectory IDs must not contain duplicates.")
+
+    metadata_by_id = result.trajectory_metadata
+    unknown_ids = [
+        trajectory_id
+        for trajectory_id in selected_ids
+        if trajectory_id not in metadata_by_id
+    ]
+    if unknown_ids:
+        raise ValueError(
+            "Unknown perturbation trajectory IDs: " + ", ".join(unknown_ids) + "."
+        )
+
+    selected_trajectories: dict[str, pd.DataFrame] = {}
+    for trajectory_id in selected_ids:
+        metadata = metadata_by_id[trajectory_id]
+        if metadata.trajectory_id != trajectory_id:
+            raise ValueError(
+                f"Perturbation metadata key {trajectory_id!r} does not match "
+                f"its trajectory ID {metadata.trajectory_id!r}."
+            )
+        if not 0 <= metadata.combination_index < len(result.trajectories):
+            raise ValueError(
+                f"Perturbation trajectory {trajectory_id!r} has an invalid "
+                "combination index."
+            )
+        trajectory = np.asarray(result.trajectories[metadata.combination_index])
+        if trajectory.ndim != 2 or trajectory.shape[1] != len(
+            result.trajectory_columns
+        ):
+            raise ValueError(
+                f"Perturbation trajectory {trajectory_id!r} does not match "
+                "the stored RoadRunner columns."
+            )
+        selected_trajectories[trajectory_id] = pd.DataFrame(
+            trajectory,
+            columns=list(result.trajectory_columns),
+            copy=False,
+        )
+    return selected_trajectories
+
+
+def prepare_phase_comparison(
+    standard_trajectory: pd.DataFrame,
+    species_ids: Sequence[str],
+    sweep_result: PerturbationSweepResult,
+    trajectory_ids: Sequence[str],
+    *,
+    standard_column_selections: Sequence[object] | None = None,
+    max_points: int = PHASE_PLOT_MAX_POINTS,
+) -> dict[str, pd.DataFrame]:
+    """Normalize and downsample Standard plus selected perturbation trajectories."""
+    comparison = {
+        "standard": downsample_phase_trajectory(
+            prepare_phase_trajectory(
+                standard_trajectory,
+                species_ids,
+                column_selections=standard_column_selections,
+            ),
+            max_points=max_points,
+        )
+    }
+    for trajectory_id, trajectory in perturbation_trajectories_for_ids(
+        sweep_result,
+        trajectory_ids,
+    ).items():
+        comparison[trajectory_id] = downsample_phase_trajectory(
+            prepare_phase_trajectory(
+                trajectory,
+                species_ids,
+                column_selections=sweep_result.trajectory_columns,
+            ),
+            max_points=max_points,
+        )
+    return comparison
 
 
 def _relative_percentage_change(
@@ -183,8 +490,9 @@ def run_perturbation_sweep(
     abs_tol: float = 1e-9,
     integrator: str = "cvode",
     max_combinations: int = 2000,
+    max_trajectory_bytes: int = PERTURBATION_TRAJECTORY_MEMORY_LIMIT_BYTES,
 ) -> PerturbationSweepResult:
-    """Perturb multiple inputs and return one pointwise envelope per target."""
+    """Perturb inputs and return target envelopes plus every full trajectory."""
     if variation_percentage <= 0:
         raise ValueError("Perturbation amplitude must be greater than zero.")
     if level_count < 3 or level_count % 2 == 0:
@@ -193,6 +501,8 @@ def run_perturbation_sweep(
         raise ValueError("Experiment end time must be greater than zero.")
     if max_combinations < 1:
         raise ValueError("Maximum combinations must be at least one.")
+    if max_trajectory_bytes < 1:
+        raise ValueError("Maximum trajectory memory must be at least one byte.")
 
     input_ids = list(input_species_ids)
     target_ids = list(target_species_ids)
@@ -227,6 +537,18 @@ def run_perturbation_sweep(
             f"the limit of {max_combinations}. Reduce the inputs or sweep levels."
         )
 
+    estimated_trajectory_bytes = estimate_perturbation_trajectory_bytes(
+        combination_count,
+        sbml_model.getNumSpecies(),
+    )
+    if estimated_trajectory_bytes > max_trajectory_bytes:
+        raise ValueError(
+            "Full perturbation trajectories require an estimated "
+            f"{estimated_trajectory_bytes / 1024**2:.1f} MiB, exceeding the "
+            f"limit of {max_trajectory_bytes / 1024**2:.0f} MiB. Reduce the "
+            "selected inputs or sweep levels."
+        )
+
     initial_values = {
         species_id: float(species_ut.initial_symbol_value(sbml_model, species_id))
         for species_id in input_ids
@@ -243,9 +565,17 @@ def run_perturbation_sweep(
         list(variation_levels),
     )
     combinations = list(sbml_ut.create_combinations(samples))
+    combination_level_indices = tuple(
+        tuple(indices)
+        for indices in product(range(int(level_count)), repeat=len(input_ids))
+    )
     if len(combinations) != combination_count:
         raise ValueError(
             "ShapCRN generated an unexpected number of perturbation combinations."
+        )
+    if len(combination_level_indices) != combination_count:
+        raise ValueError(
+            "The perturbation level index grid has an unexpected size."
         )
 
     baseline_level_index = int(np.argmin(np.abs(levels_array)))
@@ -273,13 +603,7 @@ def run_perturbation_sweep(
         species_id: species_ut.symbol_selection(sbml_model.getSpecies(species_id))
         for species_id in target_ids
     }
-    selections = list(rr_model.timeCourseSelections)
-    if "time" not in selections:
-        selections.insert(0, "time")
-    for selection in species_selections.values():
-        if selection not in selections:
-            selections.append(selection)
-    rr_model.timeCourseSelections = selections
+    rr_model.timeCourseSelections = _all_species_selections(sbml_model)
     trajectories, columns = sim_ut.simulate_combinations(
         rr_model,
         combinations,
@@ -312,10 +636,17 @@ def run_perturbation_sweep(
                 f"Simulation output does not contain target selection {selection!r}."
             ) from exc
 
-    arrays = [np.asarray(trajectory, dtype=float) for trajectory in trajectories]
+    arrays = tuple(np.asarray(trajectory, dtype=float) for trajectory in trajectories)
     expected_shape = arrays[0].shape
     if any(array.shape != expected_shape for array in arrays):
         raise ValueError("Perturbation trajectories do not share the same time grid.")
+    actual_trajectory_bytes = sum(array.nbytes for array in arrays)
+    if actual_trajectory_bytes > max_trajectory_bytes:
+        raise ValueError(
+            "Full perturbation trajectories use "
+            f"{actual_trajectory_bytes / 1024**2:.1f} MiB, exceeding the "
+            f"limit of {max_trajectory_bytes / 1024**2:.0f} MiB."
+        )
 
     envelopes: dict[str, pd.DataFrame] = {}
     for species_id, species_index in target_indices.items():
@@ -342,10 +673,53 @@ def run_perturbation_sweep(
             }
         )
 
+    input_samples = {
+        species_id: tuple(float(value) for value in species_samples)
+        for species_id, species_samples in zip(input_ids, samples, strict=True)
+    }
+    trajectory_metadata: dict[str, PerturbationTrajectoryMetadata] = {}
+    for combination_index, (level_indices, combination) in enumerate(
+        zip(combination_level_indices, combinations, strict=True)
+    ):
+        trajectory_id = f"P{combination_index + 1:04d}"
+        trajectory_metadata[trajectory_id] = PerturbationTrajectoryMetadata(
+            trajectory_id=trajectory_id,
+            combination_index=combination_index,
+            level_indices=level_indices,
+            variations=tuple(
+                (species_id, variation_levels[level_index])
+                for species_id, level_index in zip(
+                    input_ids,
+                    level_indices,
+                    strict=True,
+                )
+            ),
+            input_values=tuple(
+                (species_id, float(combination[input_index]))
+                for input_index, species_id in enumerate(input_ids)
+            ),
+            label=(
+                f"{trajectory_id} · "
+                + "; ".join(
+                    f"{species_id} {variation_levels[level_index]:+g}% → "
+                    f"{float(combination[input_index]):.8g}"
+                    for input_index, (species_id, level_index) in enumerate(
+                        zip(input_ids, level_indices, strict=True)
+                    )
+                )
+            ),
+        )
+
     return PerturbationSweepResult(
         envelopes=envelopes,
         variation_levels=variation_levels,
         initial_values=initial_values,
         species_selections=species_selections,
         combination_count=combination_count,
+        trajectories=arrays,
+        trajectory_columns=tuple(column_names),
+        input_samples=input_samples,
+        combination_level_indices=combination_level_indices,
+        baseline_index=baseline_index,
+        trajectory_metadata=trajectory_metadata,
     )

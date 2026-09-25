@@ -5,7 +5,7 @@ Replace the placeholders below with your own ShapCRN/libSBML implementation.
 
 import libsbml
 import pandas as pd
-from shapcrn.utils.sbml import io
+from shapcrn import sbml_io
 
 from .crnt import compute_crn_deficiency
 
@@ -68,7 +68,7 @@ def load_model(file_bytes: bytes):
     # -------------------------------------------------------------------------
 
     # Call your ShapCRN loader/preparation function.
-    _, sbml_model = io.load_and_prepare_model_from_bytes(
+    _, sbml_model = sbml_io.load_and_prepare_model_from_bytes(
         file_bytes, split_reversible=True
     )
 
