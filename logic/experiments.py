@@ -64,6 +64,90 @@ def _as_trajectory_frame(values: Any, columns: list[str]) -> pd.DataFrame:
     return frame
 
 
+def _selection_id(selection: object) -> str:
+    """Return the species ID represented by a RoadRunner selection."""
+    selection_text = str(selection)
+    if selection_text.startswith("[") and selection_text.endswith("]"):
+        return selection_text[1:-1]
+    return selection_text
+
+
+def prepare_phase_trajectory(
+    trajectory: pd.DataFrame,
+    species_ids: Sequence[str],
+    *,
+    column_selections: Sequence[object] | None = None,
+) -> pd.DataFrame:
+    """Return time and two or three species columns for a phase plot.
+
+    ``column_selections`` preserves the RoadRunner names associated with legacy
+    DataFrames whose columns were replaced by integer labels. Species selections
+    may use either the concentration form (``[S1]``) or the amount form (``S1``).
+    The returned frame contains the original samples without interpolation.
+    """
+    if not isinstance(trajectory, pd.DataFrame) or trajectory.empty:
+        raise ValueError("Phase plot data must be a non-empty DataFrame.")
+
+    selected_species = [str(species_id) for species_id in species_ids]
+    if len(selected_species) not in (2, 3):
+        raise ValueError("Select exactly two or three species for the phase plot.")
+    if len(set(selected_species)) != len(selected_species):
+        raise ValueError("Phase plot species must not contain duplicates.")
+    if any(not species_id for species_id in selected_species):
+        raise ValueError("Phase plot species IDs must not be empty.")
+
+    selections = (
+        list(column_selections)
+        if column_selections is not None
+        else list(trajectory.columns)
+    )
+    if len(selections) != len(trajectory.columns):
+        raise ValueError(
+            "RoadRunner column selections must match the trajectory columns."
+        )
+
+    normalized_selections = [_selection_id(selection) for selection in selections]
+    time_indices = [
+        index
+        for index, selection in enumerate(normalized_selections)
+        if selection.lower() == "time"
+    ]
+    if len(time_indices) != 1:
+        raise ValueError("Phase plot data must contain exactly one time column.")
+
+    selected_indices: dict[str, int] = {}
+    for species_id in selected_species:
+        matches = [
+            index
+            for index, selection in enumerate(normalized_selections)
+            if selection == species_id
+        ]
+        if not matches:
+            raise ValueError(
+                f"Phase plot data does not contain species {species_id!r}."
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Phase plot data contains multiple columns for species {species_id!r}."
+            )
+        selected_indices[species_id] = matches[0]
+
+    phase_data: dict[str, pd.Series] = {}
+    output_columns = [("time", time_indices[0])] + list(selected_indices.items())
+    for output_name, column_index in output_columns:
+        try:
+            phase_data[output_name] = pd.to_numeric(
+                trajectory.iloc[:, column_index],
+                errors="raise",
+            ).reset_index(drop=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Phase plot column {output_name!r} must contain numeric values."
+            ) from exc
+
+    return pd.DataFrame(phase_data)
+
+
 def _relative_percentage_change(
     values: np.ndarray,
     baseline: np.ndarray,

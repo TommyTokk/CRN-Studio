@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 
 import pandas as pd
 import plotly.express as px
@@ -103,6 +104,28 @@ def _simulation_display_frame(
     return display_frame.rename(columns=renamed_columns)
 
 
+def _trajectory_species_ids(
+    results: pd.DataFrame,
+    colnames: Sequence[object] | None,
+) -> list[str]:
+    """Return model species that are present in a stored trajectory."""
+    selections: list[object] = (
+        list(colnames)
+        if colnames is not None and len(colnames) == len(results.columns)
+        else list(results.columns)
+    )
+    available_ids = {
+        _species_id_from_selection(selection) for selection in selections
+    }
+    if loaded_model is None:
+        return []
+    return [
+        species.getId()
+        for species in loaded_model.getListOfSpecies()
+        if species.getId() in available_ids
+    ]
+
+
 model_signature = _active_model_signature()
 
 # Results must never survive a switch to another active SBML model.
@@ -112,8 +135,14 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
         "simulation_colnames",
         "simulation_config",
         "simulation_steady_state",
+        "simulation_result_revision",
         "knock_results",
         "knock_config",
+        "knock_result_revision",
+        "phase_plot_data",
+        "phase_plot_config",
+        "phase_plot_source",
+        "phase_plot_species",
         "perturbation_sweep_result",
         "perturbation_sweep_config",
         "knock_entity_species",
@@ -142,11 +171,23 @@ if "simulation_colnames" not in st.session_state:
 if "simulation_config" not in st.session_state:
     st.session_state["simulation_config"] = None
 
+if "simulation_result_revision" not in st.session_state:
+    st.session_state["simulation_result_revision"] = 0
+
 if "knock_results" not in st.session_state:
     st.session_state["knock_results"] = None
 
 if "knock_config" not in st.session_state:
     st.session_state["knock_config"] = None
+
+if "knock_result_revision" not in st.session_state:
+    st.session_state["knock_result_revision"] = 0
+
+if "phase_plot_data" not in st.session_state:
+    st.session_state["phase_plot_data"] = None
+
+if "phase_plot_config" not in st.session_state:
+    st.session_state["phase_plot_config"] = None
 
 if "perturbation_sweep_result" not in st.session_state:
     st.session_state["perturbation_sweep_result"] = None
@@ -258,6 +299,7 @@ if model_loaded and run_simulation:
                 "scan_enabled": scan_enabled,
                 "scan_parameter": scan_note,
             }
+            st.session_state["simulation_result_revision"] += 1
 
         else:
             st.warning("The simulation completed but returned no trajectory data.")
@@ -385,27 +427,6 @@ with trajectory_panel:
 
 
 # -----------------------------------------------------------------------------
-# Phase space panel
-# -----------------------------------------------------------------------------
-
-st.write("")
-
-phase_panel = st.container(border=True)
-
-with phase_panel:
-    panel_heading(
-        "Phase Space Trajectory",
-        "Limit-cycle projection / attractor view",
-    )
-
-    placeholder(
-        "Phase plane",
-        "INSERT X-vs-Y TRAJECTORY / BIFURCATION VIEW HERE.",
-        min_height=300,
-    )
-
-
-# -----------------------------------------------------------------------------
 # Knock experiment
 # -----------------------------------------------------------------------------
 
@@ -500,6 +521,7 @@ with knock_panel:
                 "rtol": float(rtol),
                 "atol": float(atol),
             }
+            st.session_state["knock_result_revision"] += 1
         except Exception as exc:
             st.error(f"Knock experiment failed: {exc}")
 
@@ -554,6 +576,251 @@ with knock_panel:
             "Post-knock trajectories",
             "SELECT AN ENTITY AND RUN A KNOCK EXPERIMENT.",
             min_height=250,
+        )
+
+
+# -----------------------------------------------------------------------------
+# Phase space panel
+# -----------------------------------------------------------------------------
+
+st.write("")
+
+phase_panel = st.container(border=True)
+
+with phase_panel:
+    panel_heading(
+        "Phase Space Trajectory",
+        "Interactive 3D projection of a stored simulation trajectory",
+    )
+
+    phase_sources: dict[str, dict[str, object]] = {}
+    if isinstance(res_df, pd.DataFrame) and not res_df.empty:
+        phase_sources["simulation"] = {
+            "label": "Standard simulation",
+            "results": res_df,
+            "colnames": simulation_colnames,
+            "revision": st.session_state["simulation_result_revision"],
+        }
+    if isinstance(knock_results, pd.DataFrame) and not knock_results.empty:
+        phase_sources["knock"] = {
+            "label": "Knock experiment",
+            "results": knock_results,
+            "colnames": list(knock_results.columns),
+            "revision": st.session_state["knock_result_revision"],
+        }
+
+    source_options = list(phase_sources)
+    previous_source = st.session_state.get("phase_plot_source")
+    if source_options and previous_source not in source_options:
+        st.session_state["phase_plot_source"] = source_options[0]
+
+    phase_control_col, species_control_col = st.columns([1.0, 2.0])
+    with phase_control_col:
+        selected_phase_source = st.selectbox(
+            "Data source",
+            source_options,
+            format_func=lambda source: str(phase_sources[source]["label"]),
+            disabled=not source_options,
+            key="phase_plot_source",
+            placeholder="Run a simulation first",
+        )
+
+    available_phase_species: list[str] = []
+    selected_source_data: dict[str, object] | None = None
+    if selected_phase_source in phase_sources:
+        selected_source_data = phase_sources[selected_phase_source]
+        source_results = selected_source_data["results"]
+        source_colnames = selected_source_data["colnames"]
+        if isinstance(source_results, pd.DataFrame):
+            available_phase_species = _trajectory_species_ids(
+                source_results,
+                (
+                    source_colnames
+                    if isinstance(source_colnames, (list, tuple))
+                    else None
+                ),
+            )
+
+    previous_phase_species = st.session_state.get("phase_plot_species", [])
+    valid_phase_species = [
+        species_id
+        for species_id in previous_phase_species
+        if species_id in available_phase_species
+    ][:3]
+    if valid_phase_species != previous_phase_species:
+        st.session_state["phase_plot_species"] = valid_phase_species
+
+    with species_control_col:
+        selected_phase_species = st.multiselect(
+            "Species (axis order: X, Y, Z)",
+            available_phase_species,
+            format_func=lambda species_id: _model_entity_label(species_id, "Species"),
+            max_selections=3,
+            disabled=not available_phase_species,
+            key="phase_plot_species",
+            placeholder="Select two or three species",
+        )
+
+    valid_phase_selection = len(selected_phase_species) in (2, 3)
+    generate_phase_plot = st.button(
+        "Generate phase plot",
+        type="primary",
+        disabled=not source_options or not valid_phase_selection,
+        key="generate_phase_plot_button",
+    )
+
+    if not source_options:
+        st.info(
+            "Run a standard simulation or a knock experiment before generating "
+            "a phase plot."
+        )
+    elif not valid_phase_selection:
+        st.caption("Select exactly two or three species to enable the phase plot.")
+
+    if generate_phase_plot and selected_source_data is not None:
+        source_results = selected_source_data["results"]
+        source_colnames = selected_source_data["colnames"]
+        try:
+            phase_data = exp.prepare_phase_trajectory(
+                source_results,
+                selected_phase_species,
+                column_selections=source_colnames,
+            )
+            st.session_state["phase_plot_data"] = phase_data.copy()
+            st.session_state["phase_plot_config"] = {
+                "source": selected_phase_source,
+                "source_label": selected_source_data["label"],
+                "source_revision": selected_source_data["revision"],
+                "species_ids": tuple(selected_phase_species),
+                "species_labels": tuple(
+                    _model_entity_label(species_id, "Species")
+                    for species_id in selected_phase_species
+                ),
+            }
+        except Exception as exc:
+            st.error(f"Phase plot generation failed: {exc}")
+
+    stored_phase_data = st.session_state.get("phase_plot_data")
+    stored_phase_config = st.session_state.get("phase_plot_config")
+    if (
+        isinstance(stored_phase_data, pd.DataFrame)
+        and not stored_phase_data.empty
+        and isinstance(stored_phase_config, dict)
+    ):
+        current_source_revision = (
+            selected_source_data["revision"]
+            if selected_source_data is not None
+            else None
+        )
+        phase_controls_changed = any(
+            [
+                stored_phase_config.get("source") != selected_phase_source,
+                stored_phase_config.get("species_ids")
+                != tuple(selected_phase_species),
+                stored_phase_config.get("source_revision")
+                != current_source_revision,
+            ]
+        )
+        if phase_controls_changed:
+            st.info(
+                "Phase plot selections or source data have changed. The chart "
+                "still shows the previously generated trajectory."
+            )
+
+        species_ids = list(stored_phase_config["species_ids"])
+        species_labels = list(stored_phase_config["species_labels"])
+        z_values = (
+            stored_phase_data[species_ids[2]]
+            if len(species_ids) == 3
+            else stored_phase_data["time"]
+        )
+        z_label = species_labels[2] if len(species_ids) == 3 else "Time"
+        hover_template = (
+            f"{species_labels[0]}: %{{x:.6g}}<br>"
+            f"{species_labels[1]}: %{{y:.6g}}<br>"
+            f"{z_label}: %{{z:.6g}}<br>"
+            "Time: %{customdata:.6g} s<extra>Trajectory</extra>"
+            if len(species_ids) == 3
+            else (
+                f"{species_labels[0]}: %{{x:.6g}}<br>"
+                f"{species_labels[1]}: %{{y:.6g}}<br>"
+                "Time: %{z:.6g} s<extra>Trajectory</extra>"
+            )
+        )
+        endpoint_hover_template = (
+            f"{species_labels[0]}: %{{x:.6g}}<br>"
+            f"{species_labels[1]}: %{{y:.6g}}<br>"
+            f"{z_label}: %{{z:.6g}}<br>"
+            "Time: %{customdata:.6g} s<extra>%{text}</extra>"
+            if len(species_ids) == 3
+            else (
+                f"{species_labels[0]}: %{{x:.6g}}<br>"
+                f"{species_labels[1]}: %{{y:.6g}}<br>"
+                "Time: %{z:.6g} s<extra>%{text}</extra>"
+            )
+        )
+        phase_fig = go.Figure()
+        phase_fig.add_trace(
+            go.Scatter3d(
+                x=stored_phase_data[species_ids[0]],
+                y=stored_phase_data[species_ids[1]],
+                z=z_values,
+                customdata=stored_phase_data["time"],
+                mode="lines",
+                name="Trajectory",
+                line={"color": "#C86B4A", "width": 6},
+                hovertemplate=hover_template,
+            )
+        )
+        endpoint_indices = [0, len(stored_phase_data) - 1]
+        phase_fig.add_trace(
+            go.Scatter3d(
+                x=stored_phase_data[species_ids[0]].iloc[endpoint_indices],
+                y=stored_phase_data[species_ids[1]].iloc[endpoint_indices],
+                z=z_values.iloc[endpoint_indices],
+                customdata=stored_phase_data["time"].iloc[endpoint_indices],
+                mode="markers+text",
+                name="Endpoints",
+                text=["Start", "End"],
+                textposition="top center",
+                marker={
+                    "size": 7,
+                    "color": ["#4E8B75", "#D39A34"],
+                    "line": {"color": "white", "width": 1},
+                },
+                hovertemplate=endpoint_hover_template,
+            )
+        )
+        phase_fig.update_layout(
+            title=(
+                "3D Phase Trajectory — "
+                f"{stored_phase_config['source_label']}"
+            ),
+            scene={
+                "xaxis_title": species_labels[0],
+                "yaxis_title": species_labels[1],
+                "zaxis_title": z_label,
+                "dragmode": "orbit",
+            },
+            legend={"orientation": "h"},
+            margin={"l": 0, "r": 0, "b": 0, "t": 55},
+        )
+        st.plotly_chart(
+            phase_fig,
+            use_container_width=True,
+            theme="streamlit",
+            config={
+                "displayModeBar": True,
+                "displaylogo": False,
+                "scrollZoom": True,
+            },
+            key="phase_plot_chart",
+        )
+    else:
+        placeholder(
+            "3D phase trajectory",
+            "SELECT A DATA SOURCE AND TWO OR THREE SPECIES, THEN GENERATE THE PLOT.",
+            min_height=300,
         )
 
 
