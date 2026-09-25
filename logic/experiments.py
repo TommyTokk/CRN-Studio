@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Any
 
+import libsbml
 import numpy as np
 import pandas as pd
 from shapcrn import (
-    knockin_reaction,
+    exceptions as shapcrn_exceptions,
     knockin_species,
     knockout_reaction,
     knockout_species,
@@ -18,11 +19,27 @@ from shapcrn import (
 from shapcrn.utils import simulation as sim_ut
 from shapcrn.utils.sbml import species as species_ut
 from shapcrn.utils.sbml import utils as sbml_ut
+from shapcrn.utils.sbml.reactions import _replace_names
+from shapcrn.utils.sbml.validation import (
+    check,
+    fresh_metaids,
+    reject_dependencies,
+    require_fixed_references,
+    transact,
+)
 
 
 PERTURBATION_TRAJECTORY_MEMORY_LIMIT_BYTES = 128 * 1024**2
 PERTURBATION_OUTPUT_ROWS = 100
 PHASE_PLOT_MAX_POINTS = 500
+
+
+@dataclass(frozen=True)
+class KnockExperimentResult:
+    """The in-memory model produced by a knock batch and its trajectory."""
+
+    modified_model: Any
+    trajectory: pd.DataFrame
 
 
 @dataclass(frozen=True)
@@ -398,23 +415,152 @@ def _all_species_selections(sbml_model: Any) -> list[str]:
     ]
 
 
+def _unique_sid(sbml_model: Any, base_id: str, reserved: set[str]) -> str:
+    """Allocate a deterministic, model-wide unique SBML identifier."""
+    candidate = base_id
+    suffix = 2
+    while (
+        candidate in reserved
+        or sbml_model.getElementBySId(candidate) is not None
+        or sbml_model.getFunctionDefinition(candidate) is not None
+    ):
+        candidate = f"{base_id}_{suffix}"
+        suffix += 1
+    reserved.add(candidate)
+    return candidate
+
+
+def _batch_knockin_reactions(
+    sbml_model: Any,
+    reaction_ids: Sequence[str],
+    values_by_reaction: dict[str, tuple[float, ...]],
+) -> Any:
+    """Knock in reactions atomically, sharing fixed copies of common reactants."""
+    modified_model = sbml_model.clone()
+    if modified_model is None:
+        raise ValueError("The SBML model could not be cloned.")
+
+    def operation(model: Any) -> None:
+        reserved_ids: set[str] = set()
+        reaction_clones: list[tuple[str, Any]] = []
+        reactant_values: dict[str, float] = {}
+
+        for reaction_id in reaction_ids:
+            reaction = model.getReaction(reaction_id)
+            if reaction is None:
+                raise ValueError(f"Reaction not found: {reaction_id}.")
+            if reaction.getFast():
+                raise shapcrn_exceptions.ModelModificationError(
+                    "knock in reaction",
+                    reaction_id,
+                    "fast=true reactions are unsupported",
+                )
+            require_fixed_references(model, reaction)
+            reject_dependencies(model, [reaction_id], reaction_id)
+
+            references = list(reaction.getListOfReactants())
+            values = values_by_reaction[reaction_id]
+            if len(values) != len(references):
+                raise ValueError(
+                    f"Reaction {reaction_id!r} requires one value per reactant."
+                )
+            local_values: dict[str, float] = {}
+            for reference, value in zip(references, values, strict=True):
+                species_id = reference.getSpecies()
+                numeric_value = float(value)
+                if (
+                    species_id in local_values
+                    and local_values[species_id] != numeric_value
+                ):
+                    raise ValueError(
+                        f"Reaction {reaction_id!r} provides inconsistent values "
+                        f"for repeated reactant {species_id!r}."
+                    )
+                local_values[species_id] = numeric_value
+                if (
+                    species_id in reactant_values
+                    and not np.isclose(
+                        reactant_values[species_id],
+                        numeric_value,
+                        rtol=1e-12,
+                        atol=0.0,
+                    )
+                ):
+                    raise ValueError(
+                        f"Shared reactant {species_id!r} has inconsistent "
+                        "knock-in values."
+                    )
+                reactant_values[species_id] = numeric_value
+
+        copy_ids: dict[str, str] = {}
+        for species_id, value in reactant_values.items():
+            species = model.getSpecies(species_id)
+            if species is None:
+                raise ValueError(f"Reactant species not found: {species_id}.")
+            copy_id = _unique_sid(model, f"{species_id}_KI", reserved_ids)
+            clone = species.clone()
+            check(clone.setId(copy_id), copy_id)
+            fresh_metaids(model, clone, f"_KI_{copy_id}")
+            species_ut.set_symbol_value(clone, value)
+            check(clone.setBoundaryCondition(True), copy_id)
+            check(clone.setConstant(True), copy_id)
+            check(model.addSpecies(clone), copy_id)
+            copy_ids[species_id] = copy_id
+
+        for reaction_id in reaction_ids:
+            reaction = model.getReaction(reaction_id)
+            law = reaction.getKineticLaw()
+            if law is None or law.getMath() is None:
+                raise shapcrn_exceptions.InvalidKineticLawError(reaction_id)
+
+            new_id = _unique_sid(model, f"{reaction_id}_KI", reserved_ids)
+            clone = reaction.clone()
+            check(clone.setId(new_id), new_id)
+            mapping: dict[str, Any] = {}
+            for reference in clone.getListOfReactants():
+                old_species_id = reference.getSpecies()
+                copy_id = copy_ids[old_species_id]
+                check(reference.setSpecies(copy_id), new_id)
+                mapping[old_species_id] = libsbml.parseL3Formula(copy_id)
+
+            parameters = (
+                law.getListOfLocalParameters()
+                if model.getLevel() == 3
+                else law.getListOfParameters()
+            )
+            for parameter in parameters:
+                mapping.pop(parameter.getId(), None)
+            check(
+                clone.getKineticLaw().setMath(
+                    _replace_names(law.getMath(), mapping)
+                ),
+                new_id,
+            )
+            fresh_metaids(model, clone, f"_KI_{new_id}")
+            reaction_clones.append((new_id, clone))
+
+        for reaction_id in reaction_ids:
+            model.removeReaction(reaction_id)
+        for new_id, clone in reaction_clones:
+            check(model.addReaction(clone), new_id)
+
+    transact(modified_model, operation)
+    return modified_model
+
+
 def run_knock_experiment(
     sbml_model: Any,
     *,
     operation: str,
     entity_type: str,
-    entity_id: str,
+    entity_ids: Sequence[str],
     end_time: float = 120.0,
     output_rows: int = 100,
     rel_tol: float = 1e-6,
     abs_tol: float = 1e-9,
     integrator: str = "cvode",
-) -> pd.DataFrame:
-    """Apply a ShapCRN knock operation and simulate the modified clone.
-
-    The public ShapCRN editing functions clone in-memory models by default, so
-    the model held by Streamlit session state remains unchanged.
-    """
+) -> KnockExperimentResult:
+    """Apply one knock operation to multiple targets and simulate the clone."""
     if end_time <= 0:
         raise ValueError("Experiment end time must be greater than zero.")
     if output_rows < 2:
@@ -422,21 +568,87 @@ def run_knock_experiment(
 
     normalized_operation = operation.strip().lower().replace("-", "")
     normalized_entity = entity_type.strip().lower()
-    dispatch = {
-        ("knockout", "species"): knockout_species,
-        ("knockout", "reaction"): knockout_reaction,
-        ("knockin", "species"): knockin_species,
-        ("knockin", "reaction"): knockin_reaction,
-    }
-
-    try:
-        modifier = dispatch[(normalized_operation, normalized_entity)]
-    except KeyError as exc:
+    if normalized_operation not in {"knockout", "knockin"} or normalized_entity not in {
+        "species",
+        "reaction",
+    }:
         raise ValueError(
             f"Unsupported knock experiment: {operation!r} on {entity_type!r}."
-        ) from exc
+        )
 
-    modified_model = modifier(sbml_model, entity_id)
+    if isinstance(entity_ids, (str, bytes)):
+        raise ValueError("Knock entities must be provided as a sequence of IDs.")
+    requested_ids = [str(entity_id) for entity_id in entity_ids]
+    if not requested_ids:
+        raise ValueError("Select at least one entity for the knock experiment.")
+    if len(set(requested_ids)) != len(requested_ids):
+        raise ValueError("Knock entities must not contain duplicates.")
+
+    entities = (
+        list(sbml_model.getListOfSpecies())
+        if normalized_entity == "species"
+        else list(sbml_model.getListOfReactions())
+    )
+    available_ids = [entity.getId() for entity in entities]
+    missing_ids = [
+        entity_id
+        for entity_id in requested_ids
+        if entity_id not in available_ids
+    ]
+    if missing_ids:
+        raise ValueError(
+            f"{normalized_entity.title()} not found: {', '.join(missing_ids)}."
+        )
+    requested = set(requested_ids)
+    ordered_ids = [entity_id for entity_id in available_ids if entity_id in requested]
+
+    if normalized_operation == "knockin" and normalized_entity == "species":
+        values = {
+            entity_id: float(sim_ut.get_species_peak_value(sbml_model, entity_id))
+            for entity_id in ordered_ids
+        }
+    elif normalized_operation == "knockin":
+        values_by_reaction = {
+            reaction_id: tuple(
+                float(value)
+                for value in sim_ut.get_reactants_peak_values(
+                    sbml_model,
+                    sbml_model.getReaction(reaction_id),
+                )
+            )
+            for reaction_id in ordered_ids
+        }
+
+    if normalized_operation == "knockin" and normalized_entity == "reaction":
+        modified_model = _batch_knockin_reactions(
+            sbml_model,
+            ordered_ids,
+            values_by_reaction,
+        )
+    else:
+        modified_model = sbml_model.clone()
+        if modified_model is None:
+            raise ValueError("The SBML model could not be cloned.")
+        modifier = (
+            knockout_species
+            if normalized_operation == "knockout" and normalized_entity == "species"
+            else knockout_reaction
+            if normalized_operation == "knockout"
+            else knockin_species
+        )
+        for entity_id in ordered_ids:
+            kwargs = (
+                {"value": values[entity_id]}
+                if normalized_operation == "knockin"
+                else {}
+            )
+            modified_model = modifier(
+                modified_model,
+                entity_id,
+                inplace=True,
+                **kwargs,
+            )
+
     rr_model = sim_ut.load_roadrunner_model(
         modified_model,
         rel_tol=rel_tol,
@@ -452,7 +664,10 @@ def run_knock_experiment(
         end_time=end_time,
         output_rows=output_rows,
     )
-    return _as_trajectory_frame(values, columns)
+    return KnockExperimentResult(
+        modified_model=modified_model,
+        trajectory=_as_trajectory_frame(values, columns),
+    )
 
 
 def list_perturbable_species(

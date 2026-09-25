@@ -32,6 +32,8 @@ page_header(
 
 ODE_MODE = "Deterministic ODE"
 STEADY_STATE_MODE = "Until steady state"
+ORIGINAL_MODEL_SOURCE = "Original model"
+POST_KNOCK_MODEL_SOURCE = "Post-knock model"
 
 
 # -----------------------------------------------------------------------------
@@ -59,14 +61,19 @@ def _active_model_signature() -> str | None:
     )
 
 
-def _model_entity_label(entity_id: str, entity_type: str) -> str:
+def _model_entity_label(
+    entity_id: str,
+    entity_type: str,
+    model: object | None = None,
+) -> str:
     """Format an SBML entity as ``ID — Name`` when a name is available."""
-    if loaded_model is None:
+    label_model = model if model is not None else loaded_model
+    if label_model is None:
         return entity_id
     getter = (
-        loaded_model.getSpecies
+        label_model.getSpecies
         if entity_type == "Species"
-        else loaded_model.getReaction
+        else label_model.getReaction
     )
     entity = getter(entity_id)
     name = entity.getName().strip() if entity is not None and entity.getName() else ""
@@ -109,6 +116,7 @@ def _simulation_display_frame(
 def _trajectory_species_ids(
     results: pd.DataFrame,
     colnames: Sequence[object] | None,
+    model: object | None = None,
 ) -> list[str]:
     """Return model species that are present in a stored trajectory."""
     selections: list[object] = (
@@ -119,11 +127,12 @@ def _trajectory_species_ids(
     available_ids = {
         _species_id_from_selection(selection) for selection in selections
     }
-    if loaded_model is None:
+    trajectory_model = model if model is not None else loaded_model
+    if trajectory_model is None:
         return []
     return [
         species.getId()
-        for species in loaded_model.getListOfSpecies()
+        for species in trajectory_model.getListOfSpecies()
         if species.getId() in available_ids
     ]
 
@@ -380,8 +389,9 @@ def _phase_comparison_figure_3d(
     selected_trajectory_ids: Sequence[str],
     *,
     standard_only: bool,
+    reference_label: str = "Standard",
 ) -> go.Figure:
-    """Build the volumetric Standard-versus-perturbations phase plot."""
+    """Build the volumetric reference-versus-perturbations phase plot."""
     visible_ids = [] if standard_only else list(selected_trajectory_ids)
     standard = comparison["standard"]
     points_by_id = {
@@ -403,8 +413,8 @@ def _phase_comparison_figure_3d(
         standard_points,
         standard_times,
         transform=transform,
-        name="Standard",
-        hover_label="Standard",
+        name=reference_label,
+        hover_label=reference_label,
         species_labels=species_labels,
         gradient=phase3d.STANDARD_GRADIENT,
         radius=phase3d.STANDARD_TUBE_RADIUS,
@@ -470,8 +480,8 @@ def _phase_comparison_figure_3d(
             transform=transform,
             radius=phase3d.STANDARD_TUBE_RADIUS * 1.55,
             color=phase3d.START_ANCHOR_COLOR,
-            name="Standard start",
-            hover_label="Standard",
+            name=f"{reference_label} start",
+            hover_label=reference_label,
             event="Start",
             species_labels=species_labels,
             legendgroup="standard",
@@ -500,8 +510,8 @@ def _phase_comparison_figure_3d(
         transform=transform,
         radius=phase3d.STANDARD_TUBE_RADIUS * 1.55,
         color=phase3d.STANDARD_GRADIENT[1],
-        name="Standard end",
-        hover_label="Standard",
+        name=f"{reference_label} end",
+        hover_label=reference_label,
         event="End",
         species_labels=species_labels,
         legendgroup="standard",
@@ -542,7 +552,7 @@ def _phase_comparison_figure_3d(
 
     phase3d.apply_scientific_scene(
         figure,
-        title="Standard vs. Perturbation Phase Trajectories",
+        title=f"{reference_label} vs. Perturbation Phase Trajectories",
         axis_titles=species_labels,
         transform=transform,
         legend_mode="comparison",
@@ -558,8 +568,9 @@ def _phase_comparison_figure(
     selected_trajectory_ids: Sequence[str],
     *,
     standard_only: bool,
+    reference_label: str = "Standard",
 ) -> go.Figure:
-    """Build a 2D/3D Standard-versus-perturbations phase plot."""
+    """Build a 2D/3D reference-versus-perturbations phase plot."""
     is_3d = len(species_ids) == 3
     if is_3d:
         return _phase_comparison_figure_3d(
@@ -569,6 +580,7 @@ def _phase_comparison_figure(
             metadata_by_id,
             selected_trajectory_ids,
             standard_only=standard_only,
+            reference_label=reference_label,
         )
 
     trace_class = go.Scatter
@@ -596,11 +608,11 @@ def _phase_comparison_figure(
             **coordinates(standard),
             customdata=standard["time"],
             mode="lines",
-            name="Standard",
+            name=reference_label,
             line={"color": "#17324D", "width": 4},
             opacity=1.0,
             hovertemplate=(
-                "Standard<br>"
+                f"{reference_label}<br>"
                 + axis_hover
                 + "Time: %{customdata:.8g} s<extra></extra>"
             ),
@@ -615,7 +627,7 @@ def _phase_comparison_figure(
                 [standard["time"].iloc[-1], "End"],
             ],
             mode="markers",
-            name="Standard endpoints",
+            name=f"{reference_label} endpoints",
             showlegend=False,
             marker={
                 "size": 7,
@@ -624,7 +636,7 @@ def _phase_comparison_figure(
                 "line": {"color": "white", "width": 1},
             },
             hovertemplate=(
-                "Standard · %{customdata[1]}<br>"
+                f"{reference_label} · %{{customdata[1]}}<br>"
                 + axis_hover
                 + "Time: %{customdata[0]:.8g} s<extra></extra>"
             ),
@@ -728,7 +740,7 @@ def _phase_comparison_figure(
         )
 
     figure.update_layout(
-        title="Standard vs. Perturbation Phase Trajectories",
+        title=f"{reference_label} vs. Perturbation Phase Trajectories",
         legend={"orientation": "h"},
         margin={"l": 0, "r": 0, "b": 0, "t": 55},
     )
@@ -758,11 +770,12 @@ def _render_phase_tab(
     revision: int,
     source_signature: tuple[object, ...] = (),
     unavailable_message: str,
+    source_model: object | None = None,
 ) -> None:
     """Render one independently persisted phase-plot source tab."""
     source_available = isinstance(results, pd.DataFrame) and not results.empty
     available_species = (
-        _trajectory_species_ids(results, colnames)
+        _trajectory_species_ids(results, colnames, source_model)
         if source_available and results is not None
         else []
     )
@@ -779,7 +792,11 @@ def _render_phase_tab(
     selected_species = st.multiselect(
         "Species (axis order: X, Y, Z)",
         available_species,
-        format_func=lambda species_id: _model_entity_label(species_id, "Species"),
+        format_func=lambda species_id: _model_entity_label(
+            species_id,
+            "Species",
+            source_model,
+        ),
         max_selections=3,
         disabled=not source_available,
         key=species_state_key,
@@ -820,7 +837,7 @@ def _render_phase_tab(
                 "source_label": source_label,
                 "species_ids": tuple(selected_species),
                 "species_labels": tuple(
-                    _model_entity_label(species_id, "Species")
+                    _model_entity_label(species_id, "Species", source_model)
                     for species_id in selected_species
                 ),
             }
@@ -873,6 +890,7 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
         "simulation_steady_state",
         "simulation_result_revision",
         "knock_results",
+        "knock_modified_model",
         "knock_config",
         "knock_result_revision",
         "phase_plot_data_by_source",
@@ -893,6 +911,9 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
         "perturbation_result_revision",
         "knock_entity_species",
         "knock_entity_reaction",
+        "knock_entities_species",
+        "knock_entities_reaction",
+        "perturbation_model_source",
         "perturbation_species",
         "perturbation_input_species",
         "perturbation_target_species",
@@ -925,6 +946,9 @@ if "simulation_result_revision" not in st.session_state:
 
 if "knock_results" not in st.session_state:
     st.session_state["knock_results"] = None
+
+if "knock_modified_model" not in st.session_state:
+    st.session_state["knock_modified_model"] = None
 
 if "knock_config" not in st.session_state:
     st.session_state["knock_config"] = None
@@ -1225,15 +1249,15 @@ with knock_panel:
         knock_entity_options = []
 
     with entity_col:
-        selected_knock_entity = st.selectbox(
-            "Entity",
+        selected_knock_entities = st.multiselect(
+            "Entities",
             knock_entity_options,
             format_func=lambda entity_id: _model_entity_label(
                 entity_id, knock_entity_type
             ),
             disabled=not knock_entity_options,
-            key=f"knock_entity_{knock_entity_type.lower()}",
-            placeholder="Load a model to list entities",
+            key=f"knock_entities_{knock_entity_type.lower()}",
+            placeholder="Select one or more entities",
         )
 
     with knock_time_col:
@@ -1248,42 +1272,60 @@ with knock_panel:
     run_knock = st.button(
         "Run knock experiment",
         type="primary",
-        disabled=not model_loaded or selected_knock_entity is None,
+        disabled=not model_loaded or not selected_knock_entities,
         key="run_knock_button",
     )
 
-    if run_knock and loaded_model is not None and selected_knock_entity is not None:
+    if run_knock and loaded_model is not None and selected_knock_entities:
         try:
-            knock_results = exp.run_knock_experiment(
+            knock_experiment = exp.run_knock_experiment(
                 loaded_model,
                 operation=knock_operation,
                 entity_type=knock_entity_type,
-                entity_id=selected_knock_entity,
+                entity_ids=selected_knock_entities,
                 end_time=float(knock_end_time),
                 rel_tol=float(rtol),
                 abs_tol=float(atol),
             )
-            st.session_state["knock_results"] = knock_results
+            next_knock_revision = st.session_state["knock_result_revision"] + 1
+            previous_sweep_config = st.session_state.get(
+                "perturbation_sweep_config"
+            )
+            if (
+                isinstance(previous_sweep_config, dict)
+                and previous_sweep_config.get("model_source") == "post-knock"
+            ):
+                st.session_state["perturbation_sweep_result"] = None
+                st.session_state["perturbation_sweep_config"] = None
+                st.session_state["perturbation_result_revision"] += 1
+                st.session_state["phase_perturbation_trajectory_ids"] = []
+                st.session_state["phase_plot_species_perturbation"] = []
+
+            st.session_state["knock_results"] = knock_experiment.trajectory
+            st.session_state["knock_modified_model"] = (
+                knock_experiment.modified_model
+            )
             st.session_state["knock_config"] = {
                 "model_signature": model_signature,
                 "operation": knock_operation,
                 "entity_type": knock_entity_type,
-                "entity_id": selected_knock_entity,
+                "entity_ids": tuple(selected_knock_entities),
                 "end_time": float(knock_end_time),
                 "rtol": float(rtol),
                 "atol": float(atol),
             }
-            st.session_state["knock_result_revision"] += 1
+            st.session_state["knock_result_revision"] = next_knock_revision
         except Exception as exc:
             st.error(f"Knock experiment failed: {exc}")
 
     knock_results = st.session_state.get("knock_results")
+    knock_modified_model = st.session_state.get("knock_modified_model")
     knock_config = st.session_state.get("knock_config")
     current_knock_config = {
         "model_signature": model_signature,
         "operation": knock_operation,
         "entity_type": knock_entity_type,
-        "entity_id": selected_knock_entity,
+        "entity_ids": tuple(selected_knock_entities),
         "end_time": float(knock_end_time),
         "rtol": float(rtol),
         "atol": float(atol),
@@ -1295,9 +1337,16 @@ with knock_panel:
                 "Knock settings have changed. The chart still shows the previous run."
             )
 
+        stored_knock_entities = tuple(
+            knock_config.get(
+                "entity_ids",
+                (knock_config.get("entity_id"),),
+            )
+        )
         st.caption(
             f"Last run: {knock_config['operation']} · "
-            f"{knock_config['entity_type']} {knock_config['entity_id']} · "
+            f"{knock_config['entity_type']} "
+            f"{', '.join(filter(None, stored_knock_entities))} · "
             f"0–{knock_config['end_time']:g} s"
         )
         knock_fig = px.line(
@@ -1345,14 +1394,54 @@ with perturbation_panel:
         "Independent input perturbations and target-specific response envelopes",
     )
 
+    perturbation_source_options = [ORIGINAL_MODEL_SOURCE]
+    if knock_modified_model is not None:
+        perturbation_source_options.append(POST_KNOCK_MODEL_SOURCE)
+    if (
+        st.session_state.get("perturbation_model_source")
+        not in perturbation_source_options
+    ):
+        st.session_state["perturbation_model_source"] = ORIGINAL_MODEL_SOURCE
+    perturbation_model_source = st.radio(
+        "Model to perturb",
+        perturbation_source_options,
+        horizontal=True,
+        key="perturbation_model_source",
+    )
+    perturbation_model = (
+        knock_modified_model
+        if perturbation_model_source == POST_KNOCK_MODEL_SOURCE
+        else loaded_model
+    )
+    perturbation_source_key = (
+        "post-knock"
+        if perturbation_model_source == POST_KNOCK_MODEL_SOURCE
+        else "original"
+    )
+
     perturbable_species: list[str] = []
     rejected_species: dict[str, str] = {}
     all_species: list[str] = []
-    if loaded_model is not None:
+    if perturbation_model is not None:
         perturbable_species, rejected_species = exp.list_perturbable_species(
-            loaded_model
+            perturbation_model
         )
-        all_species = [species.getId() for species in loaded_model.getListOfSpecies()]
+        all_species = [
+            species.getId()
+            for species in perturbation_model.getListOfSpecies()
+        ]
+
+    previous_input_species = st.session_state.get(
+        "perturbation_input_species",
+        [],
+    )
+    valid_input_species = [
+        species_id
+        for species_id in previous_input_species
+        if species_id in perturbable_species
+    ]
+    if valid_input_species != previous_input_species:
+        st.session_state["perturbation_input_species"] = valid_input_species
 
     input_species_col, target_species_col = st.columns(2, gap="medium")
 
@@ -1360,7 +1449,11 @@ with perturbation_panel:
         selected_input_species = st.multiselect(
             "Species to perturb",
             perturbable_species,
-            format_func=lambda species_id: _model_entity_label(species_id, "Species"),
+            format_func=lambda species_id: _model_entity_label(
+                species_id,
+                "Species",
+                perturbation_model,
+            ),
             disabled=not perturbable_species,
             key="perturbation_input_species",
             placeholder="Select one or more input species",
@@ -1387,7 +1480,11 @@ with perturbation_panel:
         selected_target_species = st.multiselect(
             "Target species to observe",
             observable_species,
-            format_func=lambda species_id: _model_entity_label(species_id, "Species"),
+            format_func=lambda species_id: _model_entity_label(
+                species_id,
+                "Species",
+                perturbation_model,
+            ),
             disabled=not observable_species,
             key="perturbation_target_species",
             placeholder="Select one or more non-perturbed species",
@@ -1462,9 +1559,9 @@ with perturbation_panel:
         )
 
     zero_initial_inputs: list[str] = []
-    if loaded_model is not None:
+    if perturbation_model is not None:
         for species_id in selected_input_species:
-            species = loaded_model.getSpecies(species_id)
+            species = perturbation_model.getSpecies(species_id)
             if species is not None and (
                 (species.isSetInitialAmount() and species.getInitialAmount() == 0)
                 or (
@@ -1484,7 +1581,7 @@ with perturbation_panel:
         "Run perturbation sweep",
         type="primary",
         disabled=(
-            not model_loaded
+            perturbation_model is None
             or not selected_input_species
             or not selected_target_species
             or combinations_exceeded
@@ -1499,7 +1596,7 @@ with perturbation_panel:
         sweep_error: Exception | None = None
         if (
             run_perturbation
-            and loaded_model is not None
+            and perturbation_model is not None
             and selected_input_species
             and selected_target_species
             and not combinations_exceeded
@@ -1510,7 +1607,7 @@ with perturbation_panel:
                     f"Running {combination_count:,} perturbation simulations…"
                 ):
                     sweep_result = exp.run_perturbation_sweep(
-                        loaded_model,
+                        perturbation_model,
                         input_species_ids=selected_input_species,
                         target_species_ids=selected_target_species,
                         variation_percentage=float(perturbation_variation),
@@ -1526,6 +1623,12 @@ with perturbation_panel:
                 st.session_state["perturbation_sweep_result"] = sweep_result
                 st.session_state["perturbation_sweep_config"] = {
                     "model_signature": model_signature,
+                    "model_source": perturbation_source_key,
+                    "knock_revision": (
+                        st.session_state["knock_result_revision"]
+                        if perturbation_source_key == "post-knock"
+                        else None
+                    ),
                     "input_species_ids": tuple(selected_input_species),
                     "target_species_ids": tuple(selected_target_species),
                     "variation": float(perturbation_variation),
@@ -1545,6 +1648,12 @@ with perturbation_panel:
         sweep_config = st.session_state.get("perturbation_sweep_config")
         current_sweep_config = {
             "model_signature": model_signature,
+            "model_source": perturbation_source_key,
+            "knock_revision": (
+                st.session_state["knock_result_revision"]
+                if perturbation_source_key == "post-knock"
+                else None
+            ),
             "input_species_ids": tuple(selected_input_species),
             "target_species_ids": tuple(selected_target_species),
             "variation": float(perturbation_variation),
@@ -1565,15 +1674,25 @@ with perturbation_panel:
                 f"{level:+g}%" for level in sweep_result.variation_levels
             )
             inputs_label = ", ".join(sweep_config["input_species_ids"])
+            stored_sweep_source = sweep_config.get("model_source", "original")
             st.caption(
-                f"Last run: inputs {inputs_label} · "
+                f"Last run: {stored_sweep_source} model · "
+                f"inputs {inputs_label} · "
                 f"{sweep_result.combination_count:,} combinations · "
                 f"levels {levels_label}"
             )
 
             target_tabs = st.tabs(
                 [
-                    _model_entity_label(species_id, "Species")
+                    _model_entity_label(
+                        species_id,
+                        "Species",
+                        (
+                            knock_modified_model
+                            if stored_sweep_source == "post-knock"
+                            else loaded_model
+                        ),
+                    )
                     for species_id in sweep_config["target_species_ids"]
                 ]
             )
@@ -1713,6 +1832,7 @@ with phase_panel:
             unavailable_message=(
                 "Run a standard simulation before generating this phase plot."
             ),
+            source_model=loaded_model,
         )
 
     with knock_phase_tab:
@@ -1733,15 +1853,53 @@ with phase_panel:
             unavailable_message=(
                 "Run a knock experiment before generating this phase plot."
             ),
+            source_model=knock_modified_model,
         )
 
     with perturbation_phase_tab:
-        standard_available = isinstance(res_df, pd.DataFrame) and not res_df.empty
         sweep_available = isinstance(
             sweep_result,
             exp.PerturbationSweepResult,
         )
-        comparison_available = standard_available and sweep_available
+        sweep_source = (
+            sweep_config.get("model_source", "original")
+            if isinstance(sweep_config, dict)
+            else "original"
+        )
+        if sweep_source == "post-knock":
+            reference_results = knock_results
+            reference_colnames = (
+                list(knock_results.columns)
+                if isinstance(knock_results, pd.DataFrame)
+                else None
+            )
+            reference_model = knock_modified_model
+            reference_label = "Post-knock"
+            reference_unavailable_message = (
+                "Run the matching knock experiment before comparing "
+                "perturbation trajectories."
+            )
+            matching_reference_revision = (
+                isinstance(sweep_config, dict)
+                and sweep_config.get("knock_revision")
+                == st.session_state["knock_result_revision"]
+            )
+        else:
+            reference_results = res_df
+            reference_colnames = simulation_colnames
+            reference_model = loaded_model
+            reference_label = "Standard"
+            reference_unavailable_message = (
+                "Run a Standard simulation before comparing perturbation "
+                "trajectories."
+            )
+            matching_reference_revision = True
+        reference_available = (
+            matching_reference_revision
+            and isinstance(reference_results, pd.DataFrame)
+            and not reference_results.empty
+        )
+        comparison_available = reference_available and sweep_available
         perturbation_revision = st.session_state["perturbation_result_revision"]
         if (
             st.session_state.get("phase_perturbation_selection_revision")
@@ -1767,8 +1925,8 @@ with phase_panel:
         common_species = (
             list(
                 exp.phase_species_intersection(
-                    res_df,
-                    simulation_colnames,
+                    reference_results,
+                    reference_colnames,
                     sweep_result,
                 )
             )
@@ -1802,8 +1960,8 @@ with phase_panel:
         if valid_species != previous_species:
             st.session_state["phase_plot_species_perturbation"] = valid_species
 
-        standard_only = st.checkbox(
-            "Mostra solo simulazione Standard",
+        reference_only = st.checkbox(
+            f"Mostra solo riferimento {reference_label}",
             value=False,
             disabled=not comparison_available,
             key="phase_perturbation_standard_only",
@@ -1812,33 +1970,35 @@ with phase_panel:
             "Perturbation trajectories",
             selectable_trajectory_ids,
             format_func=lambda trajectory_id: metadata_by_id[trajectory_id].label,
-            disabled=not comparison_available or standard_only,
+            disabled=not comparison_available or reference_only,
             key="phase_perturbation_trajectory_ids",
             placeholder="Select one or more perturbation combinations",
         )
         selected_species = st.multiselect(
             "Species (axis order: X, Y, Z)",
             common_species,
-            format_func=lambda species_id: _model_entity_label(species_id, "Species"),
+            format_func=lambda species_id: _model_entity_label(
+                species_id,
+                "Species",
+                reference_model,
+            ),
             max_selections=3,
             disabled=not comparison_available,
             key="phase_plot_species_perturbation",
             placeholder="Select two or three species",
         )
 
-        if not standard_available:
-            st.info(
-                "Run a Standard simulation before comparing perturbation trajectories."
-            )
-        elif not sweep_available:
+        if not sweep_available:
             st.info(
                 "Run a perturbation sweep before comparing trajectories."
             )
+        elif not reference_available:
+            st.info(reference_unavailable_message)
         elif len(selected_species) not in (2, 3):
             st.caption("Select exactly two or three species to display the phase plot.")
 
         visible_perturbation_count = (
-            0 if standard_only else len(selected_trajectory_ids)
+            0 if reference_only else len(selected_trajectory_ids)
         )
         recommended_limit = 15 if len(selected_species) == 2 else 8
         if (
@@ -1854,19 +2014,23 @@ with phase_panel:
         if comparison_available and len(selected_species) in (2, 3):
             try:
                 comparison = exp.prepare_phase_comparison(
-                    res_df,
+                    reference_results,
                     selected_species,
                     sweep_result,
                     (
                         []
-                        if standard_only
+                        if reference_only
                         else selected_trajectory_ids
                     ),
-                    standard_column_selections=simulation_colnames,
+                    standard_column_selections=reference_colnames,
                     max_points=exp.PHASE_PLOT_MAX_POINTS,
                 )
                 species_labels = [
-                    _model_entity_label(species_id, "Species")
+                    _model_entity_label(
+                        species_id,
+                        "Species",
+                        reference_model,
+                    )
                     for species_id in selected_species
                 ]
                 st.plotly_chart(
@@ -1876,7 +2040,8 @@ with phase_panel:
                         species_labels,
                         metadata_by_id,
                         selected_trajectory_ids,
-                        standard_only=standard_only,
+                        standard_only=reference_only,
+                        reference_label=reference_label,
                     ),
                     width="stretch",
                     theme=None if len(selected_species) == 3 else "streamlit",
@@ -1892,7 +2057,7 @@ with phase_panel:
         else:
             placeholder(
                 "Perturbation comparison",
-                "RUN STANDARD AND PERTURBATION SIMULATIONS, THEN SELECT SPECIES.",
+                "RUN THE REFERENCE AND PERTURBATION SIMULATIONS, THEN SELECT SPECIES.",
                 min_height=300,
             )
 
