@@ -43,9 +43,17 @@ def simulate(
     )
 
 
-def simulate_with_steady_state(rr_model: Any) -> tuple[Any, float | None, list[str]]:
+def simulate_with_steady_state(
+    rr_model: Any,
+    start_time: float = 0,
+    max_end_time: float = 1000,
+) -> tuple[Any, float | None, list[str]]:
     """Simulate a RoadRunner model until steady state."""
-    return sim_ut.simulate_with_steady_state(rr_model)
+    return sim_ut.simulate_with_steady_state(
+        rr_model,
+        start_time=start_time,
+        max_end_time=max_end_time,
+    )
 
 
 def _as_trajectory_frame(values: Any, columns: list[str]) -> pd.DataFrame:
