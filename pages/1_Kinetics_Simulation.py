@@ -18,14 +18,17 @@ from ui.components import page_header, panel_heading, placeholder
 # -----------------------------------------------------------------------------
 
 page_header(
-    eyebrow="Kinetics & numerical integration",
+    eyebrow="Kinetics, numerical integration & convergence",
     title="Kinetics & Dynamic Simulation",
     subtitle=(
-        "Time-dependent trajectory exploration, solver controls, "
-        "steady-state inspection, and perturbation experiments."
+        "Time-dependent trajectories, adaptive steady-state simulation, "
+        "and perturbation experiments."
     ),
-    status="ODE Engine Ready",
+    status="Simulation Engine Ready",
 )
+
+ODE_MODE = "Deterministic ODE"
+STEADY_STATE_MODE = "Until steady state"
 
 
 # -----------------------------------------------------------------------------
@@ -105,6 +108,10 @@ model_signature = _active_model_signature()
 # Results must never survive a switch to another active SBML model.
 if st.session_state.get("kinetics_experiment_model_signature") != model_signature:
     for state_key in (
+        "simulation_results",
+        "simulation_colnames",
+        "simulation_config",
+        "simulation_steady_state",
         "knock_results",
         "knock_config",
         "perturbation_sweep_result",
@@ -118,6 +125,9 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
         st.session_state.pop(state_key, None)
     st.session_state["kinetics_experiment_model_signature"] = model_signature
 
+# Remove the legacy value that previously fed the deleted steady-state panel.
+st.session_state.pop("simulation_steady_state", None)
+
 
 # -----------------------------------------------------------------------------
 # Simulation session state
@@ -125,9 +135,6 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
 
 if "simulation_results" not in st.session_state:
     st.session_state["simulation_results"] = None
-
-if "simulation_steady_state" not in st.session_state:
-    st.session_state["simulation_steady_state"] = None
 
 if "simulation_colnames" not in st.session_state:
     st.session_state["simulation_colnames"] = None
@@ -149,34 +156,30 @@ if "perturbation_sweep_config" not in st.session_state:
 
 
 # -----------------------------------------------------------------------------
-# Solver / simulation controls
+# Simulation controls
 # -----------------------------------------------------------------------------
 
 config = st.container(border=True)
 
 with config:
     panel_heading(
-        "Analysis Configuration & Solver Engine",
-        "Controls only — insert execution logic below",
+        "Analysis Configuration & Simulation Mode",
+        "Choose a fixed time course or simulate until convergence",
         "⚗",
     )
 
     c1, c2, c3, c4 = st.columns(4, gap="medium")
 
     with c1:
-        solver = st.selectbox(
-            "Solver engine",
-            [
-                "Deterministic ODE (LSODA)",
-                "Stiff / BDF",
-                "Custom",
-            ],
-            key="simulation_solver",
+        simulation_mode = st.selectbox(
+            "Simulation mode",
+            [ODE_MODE, STEADY_STATE_MODE],
+            key="simulation_mode",
         )
 
     with c2:
         end_time = st.slider(
-            "Horizon (s)",
+            "Horizon / maximum time (s)",
             min_value=1,
             max_value=500,
             value=100,
@@ -227,22 +230,29 @@ if model_loaded and run_simulation:
     try:
         rr_model = load_roadrunner_model(st.session_state["shapcrn_loaded_model"])
 
-        sim_res, steady_state, colnames = exp.simulate(
-            rr_model,
-            start_time=0,
-            end_time=end_time,
-        )
+        if simulation_mode == STEADY_STATE_MODE:
+            sim_res, steady_state_time, colnames = exp.simulate_with_steady_state(
+                rr_model,
+                start_time=0,
+                max_end_time=end_time,
+            )
+        else:
+            sim_res, steady_state_time, colnames = exp.simulate(
+                rr_model,
+                start_time=0,
+                end_time=end_time,
+            )
 
         res_df = pd.DataFrame(sim_res, columns=colnames)
 
         if not res_df.empty:
             st.session_state["simulation_results"] = res_df
-            st.session_state["simulation_steady_state"] = steady_state
             st.session_state["simulation_colnames"] = colnames
 
             st.session_state["simulation_config"] = {
-                "solver": solver,
+                "mode": simulation_mode,
                 "end_time": end_time,
+                "steady_state_time": steady_state_time,
                 "rtol": rtol,
                 "atol": atol,
                 "scan_enabled": scan_enabled,
@@ -272,9 +282,10 @@ simulation_config = st.session_state.get("simulation_config")
 simulation_settings_changed = False
 
 if simulation_config is not None:
+    stored_mode = simulation_config.get("mode", ODE_MODE)
     simulation_settings_changed = any(
         [
-            simulation_config.get("solver") != solver,
+            stored_mode != simulation_mode,
             simulation_config.get("end_time") != end_time,
             simulation_config.get("rtol") != rtol,
             simulation_config.get("atol") != atol,
@@ -306,11 +317,25 @@ with trajectory_panel:
         and not res_df.empty
     ):
         if simulation_config is not None:
+            stored_mode = simulation_config.get("mode", ODE_MODE)
             st.caption(
                 "Last simulation: "
-                f"{simulation_config['solver']} · "
+                f"{stored_mode} · "
                 f"0–{simulation_config['end_time']} s"
             )
+
+            if stored_mode == STEADY_STATE_MODE:
+                steady_state_time = simulation_config.get("steady_state_time")
+                if steady_state_time is not None:
+                    st.success(
+                        "Steady state reached at "
+                        f"t = {float(steady_state_time):g} s."
+                    )
+                else:
+                    st.warning(
+                        "Steady state was not reached before the maximum time "
+                        f"of {simulation_config['end_time']} s."
+                    )
 
         if simulation_settings_changed:
             st.info(
@@ -360,86 +385,24 @@ with trajectory_panel:
 
 
 # -----------------------------------------------------------------------------
-# Phase space / steady-state panels
+# Phase space panel
 # -----------------------------------------------------------------------------
 
 st.write("")
 
-left, right = st.columns(2, gap="large")
+phase_panel = st.container(border=True)
 
-with left:
-    phase_panel = st.container(border=True)
+with phase_panel:
+    panel_heading(
+        "Phase Space Trajectory",
+        "Limit-cycle projection / attractor view",
+    )
 
-    with phase_panel:
-        panel_heading(
-            "Phase Space Trajectory",
-            "Limit-cycle projection / attractor view",
-        )
-
-        placeholder(
-            "Phase plane",
-            "INSERT X-vs-Y TRAJECTORY / BIFURCATION VIEW HERE.",
-            min_height=300,
-        )
-
-
-with right:
-    steady_panel = st.container(border=True)
-
-    with steady_panel:
-        panel_heading(
-            "Steady-State & Conservation Law",
-            "Stability verification and invariant mass balance",
-        )
-
-        steady_state = st.session_state.get("simulation_steady_state")
-
-        if model_loaded and steady_state is not None:
-            st.caption("Steady-state data from the last simulation run.")
-
-            try:
-                if isinstance(steady_state, pd.DataFrame):
-                    st.dataframe(
-                        steady_state,
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                elif isinstance(steady_state, pd.Series):
-                    st.dataframe(
-                        steady_state.to_frame("Value"),
-                        use_container_width=True,
-                    )
-
-                elif isinstance(steady_state, dict):
-                    steady_df = pd.DataFrame(
-                        {
-                            "Variable": list(steady_state.keys()),
-                            "Value": list(steady_state.values()),
-                        }
-                    )
-
-                    st.dataframe(
-                        steady_df,
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                else:
-                    st.write(steady_state)
-
-            except Exception:
-                st.write(steady_state)
-
-        else:
-            placeholder(
-                "Steady-state summary",
-                (
-                    "INSERT FIXED POINTS, NET FLUX, "
-                    "CONSERVATION CHECKS, AND STATUS BADGES HERE."
-                ),
-                min_height=300,
-            )
+    placeholder(
+        "Phase plane",
+        "INSERT X-vs-Y TRAJECTORY / BIFURCATION VIEW HERE.",
+        min_height=300,
+    )
 
 
 # -----------------------------------------------------------------------------
