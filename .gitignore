@@ -220,3 +220,4 @@ target/
 .ipy
 
 tests/*
+!tests/test_importance.py

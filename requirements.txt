@@ -1,6 +1,6 @@
 streamlit>=1.40
 pandas>=2.0
-shapcrn>=0.1.2
+shapcrn>=0.2.0
 streamlit-cytoscape==0.2.1
 plotly>=5
 networkx>=3
