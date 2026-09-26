@@ -12,7 +12,7 @@ from shapcrn.utils.utils import normalize_asinh
 from logic import importance
 from logic.experiments import list_perturbable_species
 from logic.model import load_model
-from ui.components import page_header, panel_heading
+from ui.components import page_header, panel_heading, stat_card
 
 page_header(
     eyebrow="Species attribution across perturbations",
@@ -250,6 +250,117 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                     "No valid attribution values for this target; self-comparisons are unavailable."
                 )
             else:
+                max_magnitude = scores.abs().max()
+                if max_magnitude == 0:
+                    top_species = []
+                    top_value = "No dominant effect"
+                    top_help = "All valid Shapley values are zero."
+                    direction_value = "No change"
+                    direction_help = "The selected payoff is unchanged."
+                    direction_accent = "slate"
+                    variation_value = "N/A"
+                    variation_help = "Not applicable without a dominant effect."
+                else:
+                    top_species = scores.index[
+                        scores.abs() == max_magnitude
+                    ].tolist()
+                    if len(top_species) == 1:
+                        top_value = labels.get(top_species[0], top_species[0])
+                        top_help = (
+                            "Highest absolute Shapley attribution for this target."
+                        )
+                    else:
+                        top_value = f"Tie ({len(top_species)})"
+                        top_help = " · ".join(
+                            labels.get(sid, sid) for sid in top_species
+                        )
+
+                    top_scores = scores.loc[top_species]
+                    has_positive = (top_scores > 0).any()
+                    has_negative = (top_scores < 0).any()
+                    knock_label = (
+                        "KO" if stored["operation"] == "knockout" else "KI"
+                    )
+                    if has_positive and has_negative:
+                        direction_value = "Mixed"
+                        direction_help = (
+                            "Tied species move the selected payoff in opposite "
+                            "directions."
+                        )
+                        direction_accent = "amber"
+                    elif has_positive:
+                        direction_value = "Payoff ↓"
+                        direction_help = (
+                            f"{knock_label} produces a lower {stored['payoff']} "
+                            "payoff than the original model."
+                        )
+                        direction_accent = "terra"
+                    else:
+                        direction_value = "Payoff ↑"
+                        direction_help = (
+                            f"{knock_label} produces a higher {stored['payoff']} "
+                            "payoff than the original model."
+                        )
+                        direction_accent = "sage"
+
+                    top_variations = result.variations.loc[
+                        top_species, target
+                    ].dropna()
+                    if top_variations.empty:
+                        variation_value = "—"
+                        variation_help = (
+                            "No variation value is available for the top species."
+                        )
+                    elif len(top_species) == 1:
+                        variation_value = f"{top_variations.iloc[0]:.8g}"
+                        variation_help = (
+                            "Median |log₂ ratio| for the top species across "
+                            "perturbations."
+                        )
+                    else:
+                        variation_value = (
+                            f"{top_variations.min():.8g}–"
+                            f"{top_variations.max():.8g}"
+                        )
+                        variation_help = (
+                            "Range of median |log₂ ratio| values for the tied "
+                            "species."
+                        )
+
+                cards = st.columns(4, gap="medium")
+                with cards[0]:
+                    stat_card(
+                        "Top knock species",
+                        top_value,
+                        top_help,
+                        "terra",
+                        "Ranking",
+                    )
+                with cards[1]:
+                    stat_card(
+                        "Importance magnitude",
+                        f"{max_magnitude:.8g}",
+                        "Largest absolute raw Shapley value for this target.",
+                        "amber",
+                        "|Shapley|",
+                    )
+                with cards[2]:
+                    stat_card(
+                        "Knock effect",
+                        direction_value,
+                        direction_help,
+                        direction_accent,
+                        "Direction",
+                    )
+                with cards[3]:
+                    stat_card(
+                        "Perturbation variation",
+                        variation_value,
+                        variation_help,
+                        "slate",
+                        "|log₂ ratio|",
+                    )
+
                 figure = go.Figure(
                     go.Bar(
                         x=scores.tolist(),

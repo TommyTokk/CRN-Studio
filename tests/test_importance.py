@@ -344,6 +344,14 @@ class ImportanceTests(unittest.TestCase):
         self.assertEqual(
             [tab.label for tab in app.tabs], ["S2 — Product", "S3 — Reporter"]
         )
+        rendered = "\n".join(element.value for element in app.markdown)
+        self.assertIn("S3 — Reporter", rendered)
+        self.assertIn("S2 — Product", rendered)
+        self.assertIn("Payoff ↑", rendered)
+        self.assertIn("Payoff ↓", rendered)
+        self.assertIn("2.5", rendered)
+        self.assertIn("4", rendered)
+        self.assertIn("Median |log₂ ratio|", rendered)
         charts = {
             chart.key: json.loads(chart.proto.spec) for chart in app.get("plotly_chart")
         }
@@ -368,6 +376,70 @@ class ImportanceTests(unittest.TestCase):
         app.run()
         self.assertNotIn("importance_result", app.session_state)
         self.assertEqual(len(app.get("plotly_chart")), 0)
+
+    def test_summary_cards_handle_ties_zeroes_and_missing_values(self):
+        """Render explicit summaries for tied, zero, and unavailable results.
+
+        Returns
+        -------
+        None
+            Card values must remain meaningful for attribution edge cases.
+
+        Examples
+        --------
+        >>> ImportanceTests('test_summary_cards_handle_ties_zeroes_and_missing_values').run().wasSuccessful()
+        True
+        """
+        app = configured_app()
+        tied_and_zero = importance.ImportanceAnalysisResult(
+            pd.DataFrame(
+                {"S2": [2.0, -2.0], "S3": [0.0, 0.0]},
+                index=["S2", "S3"],
+            ),
+            pd.DataFrame(
+                {"S2": [0.5, 1.5], "S3": [3.0, 4.0]},
+                index=["S2", "S3"],
+            ),
+            (-20.0, 0.0, 20.0),
+            3,
+        )
+        with patch.object(
+            importance, "run_importance_analysis", return_value=tied_and_zero
+        ):
+            app.button(key="importance_run").click().run()
+        self.assertFalse(list(app.exception))
+        rendered = "\n".join(element.value for element in app.markdown)
+        self.assertIn("Tie (2)", rendered)
+        self.assertIn("S2 — Product · S3 — Reporter", rendered)
+        self.assertIn("Mixed", rendered)
+        self.assertIn("0.5–1.5", rendered)
+        self.assertIn("No dominant effect", rendered)
+        self.assertIn("No change", rendered)
+        self.assertIn("Not applicable without a dominant effect", rendered)
+
+        missing = importance.ImportanceAnalysisResult(
+            pd.DataFrame(
+                {"S2": [np.nan, -3.0], "S3": [np.nan, np.nan]},
+                index=["S2", "S3"],
+            ),
+            pd.DataFrame(
+                {"S2": [np.nan, np.nan], "S3": [np.nan, np.nan]},
+                index=["S2", "S3"],
+            ),
+            (-20.0, 0.0, 20.0),
+            3,
+        )
+        with patch.object(
+            importance, "run_importance_analysis", return_value=missing
+        ):
+            app.button(key="importance_run").click().run()
+        self.assertFalse(list(app.exception))
+        rendered = "\n".join(element.value for element in app.markdown)
+        self.assertIn("No variation value is available for the top species", rendered)
+        self.assertEqual(rendered.count("Top knock species"), 1)
+        self.assertTrue(
+            any("No valid attribution values" in info.value for info in app.info)
+        )
 
     def test_sidebar_model_switch_uses_current_source(self):
         """Reparse a newly selected source even if Overview still holds old data.
