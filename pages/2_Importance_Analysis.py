@@ -13,6 +13,9 @@ from logic import importance
 from logic.experiments import list_perturbable_species
 from logic.model import load_model
 from ui.components import page_header, panel_heading, stat_card
+from ui.styles import apply_plotly_theme, get_theme_palette
+
+THEME_PALETTE = get_theme_palette()
 
 page_header(
     eyebrow="Species attribution across perturbations",
@@ -366,9 +369,21 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                         x=scores.tolist(),
                         y=[labels.get(sid, sid) for sid in scores.index],
                         orientation="h",
-                        marker_color=[
-                            "#C86B4A" if value >= 0 else "#6F8F79" for value in scores
-                        ],
+                        marker={
+                            "color": [
+                                THEME_PALETTE["positive"]
+                                if value >= 0
+                                else THEME_PALETTE["negative"]
+                                for value in scores
+                            ],
+                            "pattern": {
+                                "shape": ["" if value >= 0 else "/" for value in scores]
+                            },
+                            "line": {
+                                "color": THEME_PALETTE["border_strong"],
+                                "width": 1,
+                            },
+                        },
                         hovertemplate="%{y}<br>Shapley: %{x:.8g}<extra></extra>",
                     )
                 )
@@ -378,9 +393,11 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                     yaxis={"autorange": "reversed"},
                     height=max(350, 28 * len(scores) + 120),
                 )
+                apply_plotly_theme(figure)
                 st.plotly_chart(
                     figure,
                     use_container_width=True,
+                    theme=None,
                     key=f"importance_bar_{target}",
                     config={"displaylogo": False},
                 )
@@ -397,11 +414,21 @@ if isinstance(result, importance.ImportanceAnalysisResult):
             )
             color_options = (
                 {
-                    "colorscale": [[0, "#6F8F79"], [0.5, "#F5F0E8"], [1, "#C86B4A"]],
+                    "colorscale": [
+                        [0, THEME_PALETTE["negative"]],
+                        [0.5, THEME_PALETTE["neutral"]],
+                        [1, THEME_PALETTE["positive"]],
+                    ],
                     "zmid": 0,
                 }
                 if name == "Shapley"
-                else {"colorscale": [[0, "#F5F0E8"], [1, "#C86B4A"]], "zmin": 0}
+                else {
+                    "colorscale": [
+                        [0, THEME_PALETTE["neutral"]],
+                        [1, THEME_PALETTE["positive"]],
+                    ],
+                    "zmin": 0,
+                }
             )
             figure = go.Figure(
                 go.Heatmap(
@@ -423,9 +450,11 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                 height=max(350, 28 * len(raw) + 140),
                 yaxis={"autorange": "reversed"},
             )
+            apply_plotly_theme(figure)
             st.plotly_chart(
                 figure,
                 use_container_width=True,
+                theme=None,
                 key=f"importance_heatmap_{name.lower()}",
                 config={"displaylogo": False},
             )

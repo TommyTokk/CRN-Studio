@@ -48,6 +48,7 @@ from ui.model_library import (
     ensure_model_library,
     sync_uploaded_models,
 )
+from ui.styles import current_theme, get_theme_palette
 
 # Used to request exactly one extra rerun when the active parsed model changes.
 # The app shell/sidebar executes before this page body, so without this handshake
@@ -61,14 +62,19 @@ _SIDEBAR_SYNC_SIGNATURE_KEY = "_shapcrn_sidebar_sync_signature"
 # -----------------------------------------------------------------------------
 
 # Simplified graph palette: one visual class for all species, one for reactions.
+_THEME_PALETTE = get_theme_palette()
 GRAPH_PALETTE = {
-    "surface": "#FFFFFF",
-    "text": "#403A48",
-    "edge": "#CFC1C8",
-    "reaction": "#F5A77A",
-    "species": "#73B8BA",
-    "modifier": "#B46E8D",
-    "other": "#AAA2B2",
+    "surface": _THEME_PALETTE["plot_bg"],
+    "text": _THEME_PALETTE["text"],
+    "text_soft": _THEME_PALETTE["text_soft"],
+    "border": _THEME_PALETTE["border"],
+    "focus": _THEME_PALETTE["focus"],
+    "shadow": _THEME_PALETTE["shadow"],
+    "edge": _THEME_PALETTE["graph_edge"],
+    "reaction": _THEME_PALETTE["graph_reaction"],
+    "species": _THEME_PALETTE["graph_species"],
+    "modifier": _THEME_PALETTE["graph_modifier"],
+    "other": _THEME_PALETTE["data_8"],
 }
 
 
@@ -113,7 +119,10 @@ def _cytoscape_component_key(
         ).hexdigest()[:12]
 
     layout_signature = layout_name.lower().replace("-", "_").replace(" ", "_")
-    return f"crn_cytoscape_canvas_{model_signature}_{layout_signature}"
+    return (
+        f"crn_cytoscape_canvas_{model_signature}_{layout_signature}_"
+        f"{current_theme()}"
+    )
 
 
 def _node_category(graph: Any, node_id: str, node_type: str) -> str:
@@ -222,7 +231,7 @@ def _cytoscape_styles() -> tuple[list[Any], list[Any]]:
         "width": 48,
         "height": 48,
         "border-width": 2,
-        "border-color": "#FFFFFF",
+        "border-color": GRAPH_PALETTE["surface"],
         "font-size": 12,
         "font-weight": 600,
         "color": GRAPH_PALETTE["text"],
@@ -465,6 +474,23 @@ def _install_graph_interaction_guard(component_key: str) -> None:
                     const host = graphFrame.parentElement;
                     if (!host) return;
 
+                    /* The component otherwise keeps its original white iframe
+                       after a theme switch, even when node colours update. */
+                    try {{
+                        const graphDoc = graphFrame.contentDocument;
+                        if (graphDoc) {{
+                            graphDoc.documentElement.style.background = '{GRAPH_PALETTE["surface"]}';
+                            graphDoc.body.style.background = '{GRAPH_PALETTE["surface"]}';
+                            graphDoc.querySelectorAll('div').forEach((element) => {{
+                                if (element.querySelector('canvas')) {{
+                                    element.style.background = '{GRAPH_PALETTE["surface"]}';
+                                }}
+                            }});
+                        }}
+                    }} catch (error) {{
+                        console.debug('ShapCRN graph canvas theme:', error);
+                    }}
+
                     const computed = window.getComputedStyle(host);
                     if (computed.position === 'static') {{
                         host.style.position = 'relative';
@@ -498,7 +524,7 @@ def _install_graph_interaction_guard(component_key: str) -> None:
                             justifyContent: 'center',
                             cursor: 'pointer',
                             borderRadius: '10px',
-                            background: 'rgba(255,255,255,0)',
+                            background: 'transparent',
                             opacity: '0',
                             visibility: 'visible',
                             pointerEvents: 'auto',
@@ -514,15 +540,15 @@ def _install_graph_interaction_guard(component_key: str) -> None:
                                 align-items:center;
                                 gap:8px;
                                 padding:10px 15px;
-                                border:1px solid rgba(232,221,216,.96);
+                                border:1px solid {GRAPH_PALETTE["border"]};
                                 border-radius:999px;
-                                background:rgba(255,255,255,.94);
-                                color:#403A48;
+                                background:{GRAPH_PALETTE["surface"]};
+                                color:{GRAPH_PALETTE["text"]};
                                 font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
                                 font-size:13px;
                                 font-weight:650;
                                 line-height:1;
-                                box-shadow:0 8px 24px rgba(78,57,72,.10);
+                                box-shadow:0 8px 24px {GRAPH_PALETTE["shadow"]};
                                 backdrop-filter:blur(8px);
                                 -webkit-backdrop-filter:blur(8px);
                                 pointer-events:none;
@@ -550,16 +576,16 @@ def _install_graph_interaction_guard(component_key: str) -> None:
                             right: '12px',
                             zIndex: '2147483001',
                             display: 'none',
-                            border: '1px solid #E8DDD8',
+                            border: '1px solid {GRAPH_PALETTE["border"]}',
                             borderRadius: '999px',
                             padding: '7px 11px',
-                            background: 'rgba(255,255,255,.95)',
-                            color: '#403A48',
+                            background: '{GRAPH_PALETTE["surface"]}',
+                            color: '{GRAPH_PALETTE["text"]}',
                             fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
                             fontSize: '12px',
                             fontWeight: '650',
                             lineHeight: '1',
-                            boxShadow: '0 5px 16px rgba(78,57,72,.10)',
+                            boxShadow: '0 5px 16px {GRAPH_PALETTE["shadow"]}',
                             cursor: 'pointer',
                             backdropFilter: 'blur(7px)',
                             WebkitBackdropFilter: 'blur(7px)'
@@ -578,14 +604,14 @@ def _install_graph_interaction_guard(component_key: str) -> None:
                          */
                         overlay.style.pointerEvents = 'auto';
                         overlay.style.opacity = '0';
-                        overlay.style.background = 'rgba(255,255,255,0)';
+                        overlay.style.background = 'transparent';
                         lockButton.style.display = 'none';
                     }};
 
                     const unlock = () => {{
                         host.setAttribute(STATE_ATTR, 'unlocked');
                         overlay.style.opacity = '0';
-                        overlay.style.background = 'rgba(255,255,255,0)';
+                        overlay.style.background = 'transparent';
                         overlay.style.pointerEvents = 'none';
                         lockButton.style.display = 'block';
                     }};
@@ -596,13 +622,13 @@ def _install_graph_interaction_guard(component_key: str) -> None:
                         overlay.addEventListener('mouseenter', () => {{
                             if (isUnlocked()) return;
                             overlay.style.opacity = '1';
-                            overlay.style.background = 'rgba(255,255,255,.08)';
+                            overlay.style.background = '{GRAPH_PALETTE["focus"]}18';
                         }});
 
                         overlay.addEventListener('mouseleave', () => {{
                             if (isUnlocked()) return;
                             overlay.style.opacity = '0';
-                            overlay.style.background = 'rgba(255,255,255,0)';
+                            overlay.style.background = 'transparent';
                         }});
 
                         overlay.addEventListener('click', (event) => {{
@@ -658,11 +684,11 @@ def _graph_legend() -> None:
         f"""
         <div style="display:flex;flex-wrap:wrap;gap:.55rem 1rem;align-items:center;
                     padding:.55rem .7rem;margin:.15rem 0 .75rem 0;
-                    border:1px solid #E8DDD8;border-radius:10px;background:#FFFFFF;">
-          <span style="display:inline-flex;align-items:center;gap:.38rem;font-size:.76rem;color:#403A48;font-weight:600;">
+                    border:1px solid var(--border);border-radius:8px;background:var(--paper);">
+          <span style="display:inline-flex;align-items:center;gap:.38rem;font-size:.76rem;color:var(--text);font-weight:600;">
             <span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:{GRAPH_PALETTE["species"]};"></span>Species
           </span>
-          <span style="display:inline-flex;align-items:center;gap:.38rem;font-size:.76rem;color:#403A48;font-weight:600;">
+          <span style="display:inline-flex;align-items:center;gap:.38rem;font-size:.76rem;color:var(--text);font-weight:600;">
             <span style="width:10px;height:10px;display:inline-block;transform:rotate(45deg);background:{GRAPH_PALETTE["reaction"]};"></span>Reaction
           </span>
         </div>

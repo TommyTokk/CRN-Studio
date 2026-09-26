@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -425,18 +425,67 @@ def apply_scientific_scene(
     axis_titles: Sequence[str],
     transform: SceneTransform,
     legend_mode: Literal["hidden", "comparison"] = "hidden",
+    theme_tokens: Mapping[str, str] | None = None,
 ) -> None:
-    """Apply the shared high-contrast scientific scene to a 3D phase figure."""
+    """Apply the shared high-contrast scientific scene to a 3D phase figure.
+
+    Parameters
+    ----------
+    figure : plotly.graph_objects.Figure
+        Three-dimensional figure to style in place.
+    title : str
+        Figure title.
+    axis_titles : sequence of str
+        Labels for the x, y, and z axes.
+    transform : SceneTransform
+        Coordinate transform used to build scientific tick labels.
+    legend_mode : {"hidden", "comparison"}, default "hidden"
+        Whether the comparison legend should be displayed.
+    theme_tokens : mapping of str to str or None, default None
+        Active semantic theme. Omission preserves the light reference style.
+
+    Returns
+    -------
+    None
+        The supplied figure is updated in place.
+
+    Examples
+    --------
+    >>> points = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+    >>> transform = SceneTransform.from_point_sets([points])
+    >>> figure = go.Figure()
+    >>> apply_scientific_scene(
+    ...     figure,
+    ...     title="Trajectory",
+    ...     axis_titles=("A", "B", "C"),
+    ...     transform=transform,
+    ... )
+    >>> figure.layout.paper_bgcolor
+    '#ffffff'
+    """
+    tokens = {
+        "plot_bg": BACKGROUND_COLOR,
+        "plot_area": BACKGROUND_COLOR,
+        "text": PRIMARY_TEXT_COLOR,
+        "text_soft": SECONDARY_TEXT_COLOR,
+        "plot_grid": "#94a3b8",
+        "border": "#d7dce5",
+        "focus": "#2678d8",
+        "hover_bg": BACKGROUND_COLOR,
+    }
+    if theme_tokens is not None:
+        tokens.update(theme_tokens)
+
     axis_style = {
         "showgrid": False,
         "zeroline": False,
         "showspikes": False,
         "showbackground": False,
-        "color": SECONDARY_TEXT_COLOR,
+        "color": tokens["text_soft"],
         "ticks": "outside",
-        "tickcolor": "#94a3b8",
-        "tickfont": {"color": SECONDARY_TEXT_COLOR, "size": 10},
-        "title": {"font": {"color": PRIMARY_TEXT_COLOR, "size": 12}},
+        "tickcolor": tokens["plot_grid"],
+        "tickfont": {"color": tokens["text_soft"], "size": 10},
+        "title": {"font": {"color": tokens["text"], "size": 12}},
         "range": [-SCENE_PADDING, 1.0 + SCENE_PADDING],
     }
     legend = {
@@ -445,32 +494,32 @@ def apply_scientific_scene(
         "xanchor": "right",
         "y": 0.98,
         "yanchor": "top",
-        "bgcolor": "rgba(255, 255, 255, 0.90)",
-        "bordercolor": "rgba(83, 97, 118, 0.24)",
+        "bgcolor": tokens["hover_bg"],
+        "bordercolor": tokens["border"],
         "borderwidth": 1,
-        "font": {"color": PRIMARY_TEXT_COLOR, "size": 10},
+        "font": {"color": tokens["text"], "size": 10},
         "tracegroupgap": 3,
     }
     figure.update_layout(
-        template="plotly_white",
+        template="none",
         title={
             "text": title,
             "x": 0.02,
             "xanchor": "left",
-            "font": {"color": PRIMARY_TEXT_COLOR, "size": 18},
+            "font": {"color": tokens["text"], "size": 18},
         },
-        font={"color": PRIMARY_TEXT_COLOR, "size": 12},
-        paper_bgcolor=BACKGROUND_COLOR,
-        plot_bgcolor=BACKGROUND_COLOR,
+        font={"color": tokens["text"], "size": 12},
+        paper_bgcolor=tokens["plot_bg"],
+        plot_bgcolor=tokens["plot_area"],
         showlegend=legend_mode == "comparison",
         legend=legend,
         height=620,
         autosize=True,
         hovermode="closest",
         hoverlabel={
-            "bgcolor": "#ffffff",
-            "bordercolor": "#2678d8",
-            "font": {"color": PRIMARY_TEXT_COLOR, "size": 12},
+            "bgcolor": tokens["hover_bg"],
+            "bordercolor": tokens["focus"],
+            "font": {"color": tokens["text"], "size": 12},
         },
         margin={"l": 30, "r": 30, "b": 35, "t": 70},
         uirevision="phase-plot-3d",
@@ -490,7 +539,7 @@ def apply_scientific_scene(
                 **transform.axis_ticks(2),
                 "title": {**axis_style["title"], "text": axis_titles[2]},
             },
-            "bgcolor": BACKGROUND_COLOR,
+            "bgcolor": tokens["plot_area"],
             "dragmode": "orbit",
             "aspectmode": "cube",
             "aspectratio": {"x": 1.0, "y": 1.0, "z": 1.0},

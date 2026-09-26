@@ -15,6 +15,18 @@ from shapcrn.utils.simulation import load_roadrunner_model
 from logic import experiments as exp
 from ui import phase_plot_3d as phase3d
 from ui.components import page_header, panel_heading, placeholder
+from ui.styles import apply_plotly_theme, get_theme_palette
+
+THEME_PALETTE = get_theme_palette()
+STANDARD_GRADIENT = (THEME_PALETTE["data_1"], THEME_PALETTE["data_7"])
+KNOCK_GRADIENT = (THEME_PALETTE["data_2"], THEME_PALETTE["data_5"])
+PERTURBATION_GRADIENTS = tuple(
+    (
+        THEME_PALETTE[f"data_{start}"],
+        THEME_PALETTE[f"data_{end}"],
+    )
+    for start, end in ((1, 7), (3, 5), (2, 6), (4, 8), (7, 5), (6, 3), (8, 2))
+)
 
 # -----------------------------------------------------------------------------
 # Page header
@@ -152,9 +164,9 @@ def _phase_figure(
         times = phase_data["time"].to_numpy(dtype=float)
         transform = phase3d.SceneTransform.from_point_sets([points])
         gradient = (
-            phase3d.STANDARD_GRADIENT
+            STANDARD_GRADIENT
             if is_standard
-            else phase3d.KNOCK_GRADIENT
+            else KNOCK_GRADIENT
         )
         radius = (
             phase3d.STANDARD_TUBE_RADIUS
@@ -192,7 +204,7 @@ def _phase_figure(
             )
         else:
             for index, event, color in (
-                (0, "Start", phase3d.START_ANCHOR_COLOR),
+                (0, "Start", THEME_PALETTE["data_5"]),
                 (-1, "End", gradient[1]),
             ):
                 _add_3d_endpoint(
@@ -214,11 +226,12 @@ def _phase_figure(
             axis_titles=species_labels,
             transform=transform,
             legend_mode="hidden",
+            theme_tokens=THEME_PALETTE,
         )
         return figure
 
     line = {
-        "color": "#17324D" if is_standard else "#C86B4A",
+        "color": THEME_PALETTE["data_1"] if is_standard else THEME_PALETTE["data_2"],
         "width": 4 if is_standard else 3,
     }
     coordinates: dict[str, object] = {
@@ -258,7 +271,7 @@ def _phase_figure(
             textposition="top center",
             marker={
                 "size": 7,
-                "color": ["#4E8B75", "#D39A34"],
+                "color": [THEME_PALETTE["data_3"], THEME_PALETTE["data_5"]],
                 "line": {"color": "white", "width": 1},
             },
             hovertemplate=(
@@ -276,17 +289,59 @@ def _phase_figure(
         xaxis_title=species_labels[0],
         yaxis_title=species_labels[1],
     )
-    return figure
+    return apply_plotly_theme(figure)
 
 
 def _perturbation_color(trajectory_id: str) -> str:
-    """Return a stable, high-contrast color derived from a perturbation ID."""
+    """Return a stable, theme-aware color for a perturbation ID.
+
+    Parameters
+    ----------
+    trajectory_id : str
+        Stable trajectory identifier, normally formatted as ``P<number>``.
+
+    Returns
+    -------
+    str
+        Colour from the active qualitative data palette.
+
+    Examples
+    --------
+    >>> _perturbation_color("P1").startswith("#")
+    True
+    """
     try:
         identifier = int(trajectory_id.removeprefix("P"))
     except ValueError:
         identifier = sum(ord(character) for character in trajectory_id)
-    hue = (identifier * 137.508) % 360
-    return f"hsl({hue:.1f}, 65%, 45%)"
+    return THEME_PALETTE[f"data_{((identifier - 1) % 8) + 1}"]
+
+
+def _phase_perturbation_gradient(trajectory_id: str) -> tuple[str, str]:
+    """Return a theme-aware gradient for a perturbation trajectory.
+
+    Parameters
+    ----------
+    trajectory_id : str
+        Stable trajectory identifier, normally formatted as ``P<number>``.
+
+    Returns
+    -------
+    tuple of str
+        Start and end colours selected from the active data palette.
+
+    Examples
+    --------
+    >>> len(_phase_perturbation_gradient("P1"))
+    2
+    """
+    try:
+        identifier = int(trajectory_id.removeprefix("P"))
+    except ValueError:
+        identifier = sum(ord(character) for character in trajectory_id)
+    return PERTURBATION_GRADIENTS[
+        (identifier - 1) % len(PERTURBATION_GRADIENTS)
+    ]
 
 
 def _mesh_hover_template(
@@ -416,7 +471,7 @@ def _phase_comparison_figure_3d(
         name=reference_label,
         hover_label=reference_label,
         species_labels=species_labels,
-        gradient=phase3d.STANDARD_GRADIENT,
+        gradient=STANDARD_GRADIENT,
         radius=phase3d.STANDARD_TUBE_RADIUS,
         max_rings=phase3d.STANDARD_MAX_RINGS,
         legendgroup="standard",
@@ -434,7 +489,7 @@ def _phase_comparison_figure_3d(
             name=metadata.label,
             hover_label=metadata.label,
             species_labels=species_labels,
-            gradient=phase3d.perturbation_gradient(trajectory_id),
+            gradient=_phase_perturbation_gradient(trajectory_id),
             radius=phase3d.PERTURBATION_TUBE_RADIUS,
             max_rings=perturbation_limit,
             legendgroup=trajectory_id,
@@ -465,7 +520,7 @@ def _phase_comparison_figure_3d(
             float(standard_times[0]),
             transform=transform,
             radius=phase3d.STANDARD_TUBE_RADIUS * 1.65,
-            color=phase3d.START_ANCHOR_COLOR,
+            color=THEME_PALETTE["data_5"],
             name="Shared origin",
             hover_label="All trajectories",
             event="Common Start",
@@ -479,7 +534,7 @@ def _phase_comparison_figure_3d(
             float(standard_times[0]),
             transform=transform,
             radius=phase3d.STANDARD_TUBE_RADIUS * 1.55,
-            color=phase3d.START_ANCHOR_COLOR,
+            color=THEME_PALETTE["data_5"],
             name=f"{reference_label} start",
             hover_label=reference_label,
             event="Start",
@@ -495,7 +550,7 @@ def _phase_comparison_figure_3d(
                 float(first_frame["time"].iloc[0]),
                 transform=transform,
                 radius=phase3d.PERTURBATION_TUBE_RADIUS * 1.65,
-                color=phase3d.START_ANCHOR_COLOR,
+                color=THEME_PALETTE["data_5"],
                 name="Perturbation origin",
                 hover_label="Perturbations",
                 event="Common Start",
@@ -509,7 +564,7 @@ def _phase_comparison_figure_3d(
         float(standard_times[-1]),
         transform=transform,
         radius=phase3d.STANDARD_TUBE_RADIUS * 1.55,
-        color=phase3d.STANDARD_GRADIENT[1],
+        color=STANDARD_GRADIENT[1],
         name=f"{reference_label} end",
         hover_label=reference_label,
         event="End",
@@ -528,14 +583,14 @@ def _phase_comparison_figure_3d(
                 float(frame["time"].iloc[0]),
                 transform=transform,
                 radius=phase3d.PERTURBATION_TUBE_RADIUS * 1.5,
-                color=phase3d.START_ANCHOR_COLOR,
+                color=THEME_PALETTE["data_5"],
                 name=f"{trajectory_id} start",
                 hover_label=metadata.label,
                 event="Start",
                 species_labels=species_labels,
                 legendgroup=trajectory_id,
             )
-        gradient = phase3d.perturbation_gradient(trajectory_id)
+        gradient = _phase_perturbation_gradient(trajectory_id)
         _add_3d_endpoint(
             figure,
             points[-1],
@@ -556,8 +611,9 @@ def _phase_comparison_figure_3d(
         axis_titles=species_labels,
         transform=transform,
         legend_mode="comparison",
+        theme_tokens=THEME_PALETTE,
     )
-    return figure
+    return apply_plotly_theme(figure)
 
 
 def _phase_comparison_figure(
@@ -609,7 +665,7 @@ def _phase_comparison_figure(
             customdata=standard["time"],
             mode="lines",
             name=reference_label,
-            line={"color": "#17324D", "width": 4},
+            line={"color": THEME_PALETTE["data_1"], "width": 4},
             opacity=1.0,
             hovertemplate=(
                 f"{reference_label}<br>"
@@ -631,7 +687,7 @@ def _phase_comparison_figure(
             showlegend=False,
             marker={
                 "size": 7,
-                "color": "#17324D",
+                "color": THEME_PALETTE["data_1"],
                 "symbol": ["circle", "diamond"],
                 "line": {"color": "white", "width": 1},
             },
@@ -727,7 +783,7 @@ def _phase_comparison_figure(
                 showlegend=False,
                 marker={
                     "size": 7,
-                    "color": "#6B7280",
+                    "color": THEME_PALETTE["data_8"],
                     "symbol": "circle",
                     "line": {"color": "white", "width": 1},
                 },
@@ -859,11 +915,7 @@ def _render_phase_tab(
         st.plotly_chart(
             _phase_figure(stored_data, stored_config),
             width="stretch",
-            theme=(
-                None
-                if len(tuple(stored_config.get("species_ids", ()))) == 3
-                else "streamlit"
-            ),
+            theme=None,
             config={
                 "displayModeBar": True,
                 "displaylogo": False,
@@ -1183,11 +1235,12 @@ with trajectory_panel:
             legend_title="Species",
             hovermode="x unified",
         )
+        apply_plotly_theme(fig)
 
         st.plotly_chart(
             fig,
             use_container_width=True,
-            theme="streamlit",
+            theme=None,
             config={
                 "displayModeBar": True,
                 "displaylogo": False,
@@ -1366,10 +1419,11 @@ with knock_panel:
             legend_title="Species",
             hovermode="x unified",
         )
+        apply_plotly_theme(knock_fig)
         st.plotly_chart(
             knock_fig,
             use_container_width=True,
-            theme="streamlit",
+            theme=None,
             config={"displayModeBar": True, "displaylogo": False},
         )
     else:
@@ -1726,10 +1780,10 @@ with perturbation_panel:
                             mode="lines",
                             line={
                                 "width": 1,
-                                "color": "rgba(55, 139, 143, 0.85)",
+                                "color": THEME_PALETTE["data_3"],
                             },
                             fill="toself",
-                            fillcolor="rgba(55, 139, 143, 0.32)",
+                            fillcolor=THEME_PALETTE["data_band"],
                             hoverinfo="skip",
                             name="Perturbation range",
                         )
@@ -1742,7 +1796,7 @@ with perturbation_panel:
                             mode="lines",
                             line={
                                 "width": 1.25,
-                                "color": "rgba(55, 139, 143, 0.9)",
+                                "color": THEME_PALETTE["data_3"],
                             },
                             name="Maximum",
                             showlegend=False,
@@ -1760,7 +1814,7 @@ with perturbation_panel:
                             mode="lines",
                             line={
                                 "width": 1.25,
-                                "color": "rgba(55, 139, 143, 0.9)",
+                                "color": THEME_PALETTE["data_3"],
                             },
                             name="Minimum",
                             showlegend=False,
@@ -1775,7 +1829,11 @@ with perturbation_panel:
                             x=envelope["time"],
                             y=envelope["baseline"],
                             mode="lines",
-                            line={"color": "#B46E8D", "width": 2.5},
+                            line={
+                                "color": THEME_PALETTE["data_6"],
+                                "width": 2.5,
+                                "dash": "dash",
+                            },
                             name="Baseline (0%)",
                             hovertemplate=(
                                 "Baseline: %{y:.5g}<br>Δ baseline: 0,00%<extra></extra>"
@@ -1789,10 +1847,11 @@ with perturbation_panel:
                         legend_title="Trajectory",
                         hovermode="x unified",
                     )
+                    apply_plotly_theme(sweep_fig)
                     st.plotly_chart(
                         sweep_fig,
                         use_container_width=True,
-                        theme="streamlit",
+                        theme=None,
                         key=f"perturbation_chart_{species_id}",
                         config={"displayModeBar": True, "displaylogo": False},
                     )
@@ -2044,7 +2103,7 @@ with phase_panel:
                         reference_label=reference_label,
                     ),
                     width="stretch",
-                    theme=None if len(selected_species) == 3 else "streamlit",
+                    theme=None,
                     config={
                         "displayModeBar": True,
                         "displaylogo": False,

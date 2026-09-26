@@ -221,3 +221,4 @@ target/
 
 tests/*
 !tests/test_importance.py
+!tests/test_theme.py

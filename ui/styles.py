@@ -9,9 +9,15 @@ Keep *presentation* here. Keep ShapCRN/scientific logic in ``logic/``.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import streamlit as st
 
-LIGHT_PALETTE = {
+if TYPE_CHECKING:
+    from plotly.graph_objects import Figure
+
+
+LIGHT_PALETTE: dict[str, str] = {
     # Canvas / surfaces
     "canvas": "#FBF8FF",
     "paper": "#FFFDF9",
@@ -20,7 +26,7 @@ LIGHT_PALETTE = {
     "surface_mid": "#EDECFB",
     "well": "#EFEAE1",
     "border": "#E8E2D9",
-    "border_strong": "#D9D0C3",
+    "border_strong": "#978D82",
     # Text
     "text": "#2B2D42",
     "text_soft": "#666A86",
@@ -52,10 +58,35 @@ LIGHT_PALETTE = {
     "negative": "#5F8F7C",
     "neutral": "#F4EFE9",
     "positive": "#D86F55",
+    # Semantic interaction tokens
+    "primary_bg": "#8A321E",
+    "primary_hover": "#6F2718",
+    "primary_active": "#581E12",
+    "primary_text": "#FFFFFF",
+    "focus": "#9A442D",
+    "shadow": "rgba(43, 45, 66, 0.10)",
+    # Charts and embedded visualisations
+    "plot_bg": "#FFFDF9",
+    "plot_area": "#FBF8FF",
+    "plot_grid": "#D9D0C3",
+    "hover_bg": "#FFFDF9",
+    "graph_edge": "#9A8D95",
+    "graph_species": "#37959A",
+    "graph_reaction": "#D97845",
+    "graph_modifier": "#9A5579",
+    "data_1": "#2764A5",
+    "data_2": "#C45A36",
+    "data_3": "#32836B",
+    "data_4": "#8A5AA5",
+    "data_5": "#A66C00",
+    "data_6": "#B04466",
+    "data_7": "#247E8A",
+    "data_8": "#59647A",
+    "data_band": "rgba(50, 131, 107, 0.24)",
 }
 
 
-DARK_PALETTE = {
+DARK_PALETTE: dict[str, str] = {
     # Dark-mode tokens from the supplied design system.
     "canvas": "#1E202C",
     "paper": "#252837",
@@ -64,7 +95,7 @@ DARK_PALETTE = {
     "surface_mid": "#33364A",
     "well": "#181923",
     "border": "#3D4158",
-    "border_strong": "#4E536F",
+    "border_strong": "#6F7692",
     "text": "#F8F5F0",
     "text_soft": "#A5A9C0",
     "code": "#FDFBF7",
@@ -92,6 +123,29 @@ DARK_PALETTE = {
     "negative": "#81B29A",
     "neutral": "#33364A",
     "positive": "#E07A5F",
+    "primary_bg": "#A94F38",
+    "primary_hover": "#B85A43",
+    "primary_active": "#873A27",
+    "primary_text": "#FFFFFF",
+    "focus": "#FFB4A1",
+    "shadow": "rgba(0, 0, 0, 0.28)",
+    "plot_bg": "#252837",
+    "plot_area": "#202330",
+    "plot_grid": "#4E536F",
+    "hover_bg": "#303447",
+    "graph_edge": "#858BA8",
+    "graph_species": "#65C4C7",
+    "graph_reaction": "#F0A06F",
+    "graph_modifier": "#D58BB0",
+    "data_1": "#6AAFE6",
+    "data_2": "#FF8A65",
+    "data_3": "#72C7A7",
+    "data_4": "#C59BE3",
+    "data_5": "#F2C05C",
+    "data_6": "#F08AA8",
+    "data_7": "#62C8D0",
+    "data_8": "#AEB7CC",
+    "data_band": "rgba(114, 199, 167, 0.22)",
 }
 
 # Backwards-compatible alias for code that only needs the light design tokens.
@@ -107,6 +161,17 @@ def ensure_ui_state() -> None:
     Streamlit multipage apps share ``st.session_state`` within the same browser
     session. Keeping the theme under one key means switching it in the sidebar
     immediately applies to Overview, Kinetics, and Importance on their next run.
+
+    Returns
+    -------
+    None
+        The shared session state is updated in place.
+
+    Examples
+    --------
+    >>> ensure_ui_state()  # doctest: +SKIP
+    >>> st.session_state[THEME_STATE_KEY] in {"light", "dark"}  # doctest: +SKIP
+    True
     """
     if THEME_STATE_KEY not in st.session_state:
         # Migrate the older boolean key if someone opens a session created by a
@@ -120,10 +185,108 @@ def ensure_ui_state() -> None:
 
 
 def current_theme() -> str:
-    """Return the app-wide theme selected in the custom sidebar."""
+    """Return the app-wide theme selected in the custom sidebar.
+
+    Returns
+    -------
+    str
+        Either ``"light"`` or ``"dark"``.
+
+    Examples
+    --------
+    >>> current_theme() in {"light", "dark"}  # doctest: +SKIP
+    True
+    """
     ensure_ui_state()
     theme = str(st.session_state.get(THEME_STATE_KEY, "light")).lower()
     return "dark" if theme == "dark" else "light"
+
+
+def get_theme_palette(theme: str | None = None) -> dict[str, str]:
+    """Return the semantic colour tokens for a light or dark interface.
+
+    Parameters
+    ----------
+    theme : str or None, default None
+        Explicit theme name. When omitted, use the current session theme.
+
+    Returns
+    -------
+    dict of str to str
+        A copy of the selected theme tokens, safe for callers to extend locally.
+
+    Examples
+    --------
+    >>> get_theme_palette("dark")["primary_text"]
+    '#FFFFFF'
+    """
+    selected_theme = current_theme() if theme is None else str(theme).lower()
+    source = DARK_PALETTE if selected_theme == "dark" else LIGHT_PALETTE
+    return dict(source)
+
+
+def apply_plotly_theme(figure: Figure, theme: str | None = None) -> Figure:
+    """Apply the shared visual theme to a Plotly figure in place.
+
+    Parameters
+    ----------
+    figure : plotly.graph_objects.Figure
+        Figure whose layout, Cartesian axes, and color bars should be styled.
+    theme : str or None, default None
+        Explicit theme name. When omitted, use the current session theme.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        The same figure instance after theme styling.
+
+    Examples
+    --------
+    >>> import plotly.graph_objects as go
+    >>> fig = apply_plotly_theme(go.Figure(), "dark")
+    >>> fig.layout.paper_bgcolor
+    '#252837'
+    """
+    palette = get_theme_palette(theme)
+    figure.update_layout(
+        template="none",
+        paper_bgcolor=palette["plot_bg"],
+        plot_bgcolor=palette["plot_area"],
+        font={"color": palette["text"], "family": "Inter, sans-serif"},
+        title_font={"color": palette["text"]},
+        legend={
+            "bgcolor": palette["plot_bg"],
+            "bordercolor": palette["border"],
+            "borderwidth": 1,
+            "font": {"color": palette["text"]},
+            "title": {"font": {"color": palette["text"]}},
+        },
+        hoverlabel={
+            "bgcolor": palette["hover_bg"],
+            "bordercolor": palette["focus"],
+            "font": {"color": palette["text"]},
+        },
+        colorway=[palette[f"data_{index}"] for index in range(1, 9)],
+    )
+    axis_style = {
+        "color": palette["text_soft"],
+        "gridcolor": palette["plot_grid"],
+        "linecolor": palette["border_strong"],
+        "zerolinecolor": palette["border_strong"],
+        "tickfont": {"color": palette["text_soft"]},
+        "title_font": {"color": palette["text"]},
+    }
+    figure.update_xaxes(**axis_style)
+    figure.update_yaxes(**axis_style)
+    for trace in figure.data:
+        colorbar = getattr(trace, "colorbar", None)
+        if colorbar is not None:
+            colorbar.update(
+                tickfont={"color": palette["text_soft"]},
+                title={"font": {"color": palette["text"]}},
+                outlinecolor=palette["border"],
+            )
+    return figure
 
 
 def apply_global_styles() -> None:
@@ -137,7 +300,7 @@ def apply_global_styles() -> None:
     """
 
     ensure_ui_state()
-    palette = DARK_PALETTE if current_theme() == "dark" else LIGHT_PALETTE
+    palette = get_theme_palette()
 
     st.markdown(
         f"""
@@ -179,6 +342,16 @@ def apply_global_styles() -> None:
                 --negative: {palette["negative"]};
                 --neutral: {palette["neutral"]};
                 --positive: {palette["positive"]};
+                --primary-bg: {palette["primary_bg"]};
+                --primary-hover: {palette["primary_hover"]};
+                --primary-active: {palette["primary_active"]};
+                --primary-text: {palette["primary_text"]};
+                --focus: {palette["focus"]};
+                --shadow: {palette["shadow"]};
+                --plot-bg: {palette["plot_bg"]};
+                --plot-area: {palette["plot_area"]};
+                --plot-grid: {palette["plot_grid"]};
+                --hover-bg: {palette["hover_bg"]};
                 color-scheme: {"dark" if current_theme() == "dark" else "light"};
             }}
 
@@ -730,13 +903,13 @@ def apply_global_styles() -> None:
                 border-radius: 8px;
             }}
 
-            div[data-testid="stFileUploaderDropzone"] {{
+            [data-testid="stFileUploaderDropzone"] {{
                 border: 1.5px dashed var(--border-strong);
                 border-radius: 6px;
                 background: var(--surface-low);
             }}
 
-            div[data-testid="stFileUploaderDropzone"]:hover {{
+            [data-testid="stFileUploaderDropzone"]:hover {{
                 border-color: var(--terracotta);
                 background: var(--upload-hover);
             }}
@@ -749,8 +922,10 @@ def apply_global_styles() -> None:
                 background: var(--paper) !important;
                 color: var(--text) !important;
                 font-weight: 600 !important;
-                box-shadow: 0 1px 3px rgba(61,64,91,.04) !important;
+                box-shadow: 0 1px 3px var(--shadow) !important;
                 min-height: 2.35rem;
+                transition: background 120ms ease, border-color 120ms ease,
+                    color 120ms ease, box-shadow 120ms ease, transform 80ms ease;
             }}
 
             /* Button labels are nested elements in recent Streamlit versions.
@@ -827,14 +1002,14 @@ def apply_global_styles() -> None:
             }}
 
             .stButton > button[kind="primary"] {{
-                background: var(--terracotta-dark) !important;
-                border-color: var(--terracotta-dark) !important;
-                color: #FFFFFF !important;
+                background: var(--primary-bg) !important;
+                border-color: var(--primary-bg) !important;
+                color: var(--primary-text) !important;
             }}
 
             .stButton > button[kind="primary"] * {{
-                color: #FFFFFF !important;
-                fill: #FFFFFF !important;
+                color: var(--primary-text) !important;
+                fill: var(--primary-text) !important;
             }}
 
             .stButton > button:hover:not(:disabled),
@@ -845,13 +1020,44 @@ def apply_global_styles() -> None:
             }}
 
             .stButton > button[kind="primary"]:hover:not(:disabled) {{
-                color: #FFFFFF !important;
-                background: #873A27 !important;
+                color: var(--primary-text) !important;
+                background: var(--primary-hover) !important;
+                border-color: var(--primary-hover) !important;
             }}
 
             .stButton > button[kind="primary"]:hover:not(:disabled) * {{
-                color: #FFFFFF !important;
-                fill: #FFFFFF !important;
+                color: var(--primary-text) !important;
+                fill: var(--primary-text) !important;
+            }}
+
+            .stButton > button:active:not(:disabled),
+            .stDownloadButton > button:active:not(:disabled) {{
+                transform: translateY(1px);
+            }}
+
+            .stButton > button[kind="primary"]:active:not(:disabled) {{
+                background: var(--primary-active) !important;
+                border-color: var(--primary-active) !important;
+            }}
+
+            /* The sidebar removal action needs its own semantic treatment.
+               Streamlit otherwise mixes its light secondary-button label with
+               the dark application surface after a theme switch. */
+            .st-key-remove_active_model button {{
+                background: var(--terra-bg) !important;
+                border-color: var(--terracotta) !important;
+                color: var(--terra-text) !important;
+            }}
+
+            .st-key-remove_active_model button * {{
+                color: inherit !important;
+                fill: currentColor !important;
+            }}
+
+            .st-key-remove_active_model button:hover:not(:disabled) {{
+                background: var(--upload-hover) !important;
+                border-color: var(--focus) !important;
+                color: var(--terra-text) !important;
             }}
 
             /* Keep intentionally disabled skeleton actions readable rather than
@@ -873,6 +1079,8 @@ def apply_global_styles() -> None:
 
             div[data-baseweb="select"] > div,
             div[data-baseweb="input"] > div,
+            .stSelectbox [role="group"],
+            .stMultiSelect [role="group"],
             .stNumberInput input,
             .stTextInput input {{
                 background: var(--well) !important;
@@ -881,16 +1089,56 @@ def apply_global_styles() -> None:
                 color: var(--text) !important;
             }}
 
+            .stNumberInput button {{
+                background: var(--surface-low) !important;
+                border-color: var(--border) !important;
+                color: var(--text) !important;
+            }}
+
+            .stNumberInput button * {{
+                color: inherit !important;
+                fill: currentColor !important;
+            }}
+
+            .stNumberInput button:hover:not(:disabled) {{
+                background: var(--nav-hover) !important;
+                color: var(--focus) !important;
+            }}
+
+            .stNumberInput button:disabled {{
+                background: var(--disabled-bg) !important;
+                color: var(--disabled-text) !important;
+                opacity: 1 !important;
+            }}
+
             div[data-baseweb="select"] > div:focus-within,
-            div[data-baseweb="input"] > div:focus-within {{
-                border-color: var(--terracotta) !important;
-                box-shadow: none !important;
+            div[data-baseweb="input"] > div:focus-within,
+            .stNumberInput:focus-within,
+            .stTextInput:focus-within {{
+                border-color: var(--focus) !important;
+                box-shadow: 0 0 0 2px var(--canvas), 0 0 0 4px var(--focus) !important;
+            }}
+
+            .stButton > button:focus-visible,
+            .stDownloadButton > button:focus-visible,
+            [role="tab"]:focus-visible,
+            [role="radio"]:focus-visible,
+            [role="checkbox"]:focus-visible,
+            [role="switch"]:focus-visible,
+            a:focus-visible {{
+                outline: 2px solid var(--focus) !important;
+                outline-offset: 2px !important;
             }}
 
             div[data-testid="stSlider"] [role="slider"] {{
                 background: var(--terracotta) !important;
-                border: 2px solid white !important;
+                border: 2px solid var(--paper) !important;
                 box-shadow: 0 1px 3px rgba(0,0,0,.15);
+            }}
+
+            div[data-testid="stSlider"] [data-testid="stTickBar"] *,
+            div[data-testid="stSlider"] [data-testid="stThumbValue"] {{
+                color: var(--text-soft) !important;
             }}
 
             .stTabs [data-baseweb="tab-list"] {{
@@ -931,8 +1179,22 @@ def apply_global_styles() -> None:
             }}
 
             [data-baseweb="select"] *,
-            [data-baseweb="input"] * {{
+            [data-baseweb="input"] *,
+            .stSelectbox [role="group"] *,
+            .stMultiSelect [role="group"] * {{
                 color: var(--text) !important;
+            }}
+
+            input::placeholder,
+            textarea::placeholder {{
+                color: var(--text-soft) !important;
+                opacity: .82 !important;
+            }}
+
+            input:disabled::placeholder,
+            textarea:disabled::placeholder {{
+                color: var(--disabled-text) !important;
+                opacity: 1 !important;
             }}
 
             /* Popovers and menus are rendered in a portal outside the widget
@@ -959,6 +1221,12 @@ def apply_global_styles() -> None:
 
             [data-testid="stAlert"] {{
                 color: var(--text) !important;
+                background: var(--surface-low) !important;
+                border: 1px solid var(--border) !important;
+            }}
+
+            [data-testid="stAlert"] * {{
+                color: inherit !important;
             }}
 
             /* Make toggles/checkmarks harmonise with the scientific accent. */
@@ -972,6 +1240,31 @@ def apply_global_styles() -> None:
                 border-radius: 8px;
                 overflow: hidden;
                 background: var(--paper);
+            }}
+
+            /* Plotly is explicitly themed in Python; these rules cover the
+               remaining toolbar chrome that Plotly renders in the browser. */
+            div[data-testid="stPlotlyChart"] {{
+                background: var(--plot-bg);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                overflow: hidden;
+            }}
+
+            div[data-testid="stPlotlyChart"] .modebar {{
+                background: var(--hover-bg) !important;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                padding: 2px;
+            }}
+
+            div[data-testid="stPlotlyChart"] .modebar-btn path {{
+                fill: var(--text-soft) !important;
+            }}
+
+            div[data-testid="stPlotlyChart"] .modebar-btn:hover path,
+            div[data-testid="stPlotlyChart"] .modebar-btn.active path {{
+                fill: var(--focus) !important;
             }}
 
             hr {{ border-color: var(--border) !important; }}
