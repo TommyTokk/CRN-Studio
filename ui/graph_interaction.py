@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 
 import streamlit.components.v1 as st_components
@@ -11,6 +12,8 @@ import streamlit.components.v1 as st_components
 def install_graph_interaction_guard(
     component_key: str,
     palette: Mapping[str, str],
+    infopanel_title_field: str | None = None,
+    managed_selected_node_id: str | None = None,
 ) -> None:
     """Install a click-to-enter shield over the preceding graph component.
 
@@ -20,6 +23,12 @@ def install_graph_interaction_guard(
         Stable key of the graph protected by the shield.
     palette : mapping of str to str
         Theme colours containing surface, text, border, focus, and shadow.
+    infopanel_title_field : str, optional
+        Node data field used as the information-panel title. When omitted, the
+        component's native title remains unchanged.
+    managed_selected_node_id : str, optional
+        Node whose visual selection follows application state. Clearing a
+        previously managed value also closes the information panel.
 
     Returns
     -------
@@ -35,6 +44,8 @@ def install_graph_interaction_guard(
     """
     guard_token = hashlib.sha1(component_key.encode("utf-8")).hexdigest()[:12]
     surface = palette.get("surface", palette.get("plot_bg", "#ffffff"))
+    title_field = json.dumps(infopanel_title_field)
+    selected_node_id = json.dumps(managed_selected_node_id)
 
     st_components.html(
         f"""
@@ -44,6 +55,13 @@ def install_graph_interaction_guard(
             const OVERLAY_ID = 'shapcrn-graph-overlay-' + TOKEN;
             const LOCK_ID = 'shapcrn-graph-lock-' + TOKEN;
             const STATE_ATTR = 'data-shapcrn-graph-state-' + TOKEN;
+            const PANEL_STYLE_ID = 'shapcrn-infopanel-style-' + TOKEN;
+            const PANEL_RUNTIME_ID = 'shapcrn-infopanel-runtime-' + TOKEN;
+            const TITLE_FIELD_ATTR = 'data-shapcrn-title-field-' + TOKEN;
+            const SELECTED_NODE_ATTR = 'data-shapcrn-selected-node-' + TOKEN;
+            const PREVIOUS_NODE_ATTR = 'data-shapcrn-previous-node-' + TOKEN;
+            const INFO_TITLE_FIELD = {title_field};
+            const MANAGED_SELECTED_NODE_ID = {selected_node_id};
 
             const install = (attempt = 0) => {{
                 try {{
@@ -87,6 +105,172 @@ def install_graph_interaction_guard(
                                     element.style.background = '{surface}';
                                 }}
                             }});
+
+                            const infopanel = graphDoc.getElementById('infopanel');
+
+                            if (INFO_TITLE_FIELD && infopanel) {{
+                                if (!graphDoc.getElementById(PANEL_STYLE_ID)) {{
+                                    const style = graphDoc.createElement('style');
+                                    style.id = PANEL_STYLE_ID;
+                                    style.textContent = `
+                                        .infopanel__name {{
+                                            flex: 1 1 auto;
+                                            width: auto;
+                                            min-width: 0;
+                                            height: auto;
+                                            min-height: 2rem;
+                                            padding: .2rem;
+                                            line-height: 1.2;
+                                            white-space: normal;
+                                            overflow-wrap: anywhere;
+                                            word-break: break-word;
+                                        }}
+                                        .infopanel__icon {{ flex: 0 0 2rem; }}
+                                    `;
+                                    graphDoc.head.appendChild(style);
+                                }}
+
+                                graphDoc.documentElement.setAttribute(
+                                    TITLE_FIELD_ATTR,
+                                    INFO_TITLE_FIELD
+                                );
+                                graphDoc.documentElement.setAttribute(
+                                    SELECTED_NODE_ATTR,
+                                    MANAGED_SELECTED_NODE_ID || ''
+                                );
+
+                                if (!graphDoc.getElementById(PANEL_RUNTIME_ID)) {{
+                                    const runtime = graphDoc.createElement('script');
+                                    runtime.id = PANEL_RUNTIME_ID;
+                                    runtime.textContent = `
+                                        (() => {{
+                                            const root = document.documentElement;
+                                            const titleAttr = '${{TITLE_FIELD_ATTR}}';
+                                            const selectedAttr = '${{SELECTED_NODE_ATTR}}';
+                                            const previousAttr = '${{PREVIOUS_NODE_ATTR}}';
+
+                                            const start = (attempt = 0) => {{
+                                                const cy = document.getElementById('cy')?._cyreg?.cy;
+                                                const cyContainer = document.getElementById('cy');
+                                                const panel = document.getElementById('infopanel');
+                                                if (!cy || !cyContainer || !panel) {{
+                                                    if (attempt < 20) {{
+                                                        window.setTimeout(
+                                                            () => start(attempt + 1),
+                                                            100
+                                                        );
+                                                    }}
+                                                    return;
+                                                }}
+
+                                                const refreshTitle = () => {{
+                                                    if (
+                                                        panel.getAttribute('data-expanded')
+                                                        !== 'true'
+                                                    ) return;
+                                                    const selected = cy.$(':selected').first();
+                                                    if (!selected || selected.length === 0) return;
+                                                    const field = root.getAttribute(titleAttr);
+                                                    const title = selected.data(field) || selected.id();
+                                                    const element = document.querySelector(
+                                                        '.infopanel__name'
+                                                    );
+                                                    if (
+                                                        element
+                                                        && element.textContent !== String(title)
+                                                    ) element.textContent = String(title);
+                                                }};
+
+                                                const syncSelection = () => {{
+                                                    const selectedId = root.getAttribute(
+                                                        selectedAttr
+                                                    );
+                                                    const previousId = root.getAttribute(
+                                                        previousAttr
+                                                    );
+                                                    if (selectedId) {{
+                                                        const node = cy.getElementById(selectedId);
+                                                        if (node.length > 0) {{
+                                                            if (!node.selected()) node.select();
+                                                            if (previousId !== selectedId) {{
+                                                                root.setAttribute(
+                                                                    previousAttr,
+                                                                    selectedId
+                                                                );
+                                                            }}
+                                                        }}
+                                                    }} else if (previousId) {{
+                                                        const previousNode = cy.getElementById(
+                                                            previousId
+                                                        );
+                                                        if (previousNode.length > 0) {{
+                                                            previousNode.unselect();
+                                                        }}
+                                                        root.removeAttribute(previousAttr);
+                                                    }}
+                                                }};
+
+                                                let reservedWidth = null;
+                                                const syncCanvasSpace = () => {{
+                                                    const expanded = (
+                                                        panel.getAttribute('data-expanded')
+                                                        === 'true'
+                                                    );
+                                                    const container = document.getElementById(
+                                                        'container'
+                                                    );
+                                                    const width = expanded && container
+                                                        ? Math.ceil(
+                                                            panel.getBoundingClientRect().right
+                                                            - container.getBoundingClientRect().left
+                                                        )
+                                                        : 0;
+                                                    if (reservedWidth === width) return;
+                                                    reservedWidth = width;
+                                                    cyContainer.style.marginLeft = width
+                                                        ? width + 'px'
+                                                        : '';
+                                                    cyContainer.style.width = width
+                                                        ? 'calc(100% - ' + width + 'px)'
+                                                        : '';
+                                                    window.requestAnimationFrame(() => {{
+                                                        cy.resize();
+                                                        cy.fit(undefined, 45);
+                                                    }});
+                                                }};
+
+                                                new MutationObserver(() => {{
+                                                    syncSelection();
+                                                    refreshTitle();
+                                                }}).observe(root, {{
+                                                    attributes: true,
+                                                    attributeFilter: [
+                                                        titleAttr,
+                                                        selectedAttr
+                                                    ]
+                                                }});
+                                                new MutationObserver(() => {{
+                                                    refreshTitle();
+                                                    syncCanvasSpace();
+                                                }}).observe(
+                                                    panel,
+                                                    {{
+                                                        attributes: true,
+                                                        childList: true,
+                                                        characterData: true,
+                                                        subtree: true
+                                                    }}
+                                                );
+                                                syncSelection();
+                                                refreshTitle();
+                                                syncCanvasSpace();
+                                            }};
+                                            start();
+                                        }})();
+                                    `;
+                                    graphDoc.body.appendChild(runtime);
+                                }}
+                            }}
                         }}
                     }} catch (error) {{
                         console.debug('ShapCRN graph canvas theme:', error);

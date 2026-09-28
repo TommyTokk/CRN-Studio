@@ -167,7 +167,6 @@ def build_importance_cytoscape_elements(
         }
         if player_effect is not None:
             node["data"]["_is_knock"] = "true"
-            node["selectable"] = False
         nodes.append(node)
 
     for source, target, edge_data in graph.edges(data=True):
@@ -721,5 +720,10 @@ def render_importance_graph(
         events=[Event("importance_knock_tap", "tap", "node[_is_knock = 'true']")],
         hide_underscore_attrs=True,
     )
-    install_graph_interaction_guard(component_key, palette)
+    install_graph_interaction_guard(
+        component_key,
+        palette,
+        infopanel_title_field="name",
+        managed_selected_node_id=selected_player_id,
+    )
     return dict(event) if isinstance(event, Mapping) else None

@@ -15,6 +15,7 @@ from streamlit.testing.v1 import AppTest
 from logic import importance
 from logic.experiments import sim_ut
 from logic.network import build_importance_graph_annotations
+from ui.graph_interaction import install_graph_interaction_guard
 from ui.importance_graph import build_importance_cytoscape_elements
 
 PAGE = Path(__file__).parents[1] / "pages" / "2_Importance_Analysis.py"
@@ -830,6 +831,7 @@ class ImportanceGraphTests(unittest.TestCase):
         self.assertEqual(nodes["I"]["data"]["label"], "KNOCK_INHIBITOR")
         self.assertEqual(nodes["X"]["data"]["label"], "KNOCK_UNAVAILABLE")
         self.assertEqual(nodes["Q"]["data"]["label"], "BACKGROUND_SPECIES")
+        self.assertTrue(all(node.get("selectable", True) for node in nodes.values()))
         self.assertIn("position", nodes["P"])
         self.assertEqual(edges[("A", "T")]["data"]["label"], "PATH_MIXED")
         self.assertEqual(
@@ -880,7 +882,7 @@ class ImportanceGraphTests(unittest.TestCase):
         }
 
         self.assertEqual(nodes["P"]["data"]["label"], "FOCUSED_KNOCK_PROMOTER")
-        self.assertFalse(nodes["P"]["selectable"])
+        self.assertTrue(nodes["P"].get("selectable", True))
         self.assertEqual(nodes["P"]["data"]["_is_knock"], "true")
         self.assertEqual(nodes["T"]["data"]["label"], "FOCUSED_TARGET")
         self.assertEqual(
@@ -940,3 +942,74 @@ class ImportanceGraphTests(unittest.TestCase):
                 for edge in disconnected_elements["edges"]
             )
         )
+
+    def test_infopanel_title_and_selection_are_opt_in(self):
+        """Inject a readable, wrapping title and managed selection state.
+
+        Returns
+        -------
+        None
+            Assertions fail if the generated bridge omits panel behaviour.
+
+        Examples
+        --------
+        >>> ImportanceGraphTests(
+        ...     "test_infopanel_title_and_selection_are_opt_in"
+        ... ).run().wasSuccessful()
+        True
+        """
+        palette = {
+            "surface": "#ffffff",
+            "text": "#111111",
+            "border": "#dddddd",
+            "focus": "#336699",
+            "shadow": "#00000033",
+        }
+
+        with patch("ui.graph_interaction.st_components.html") as html:
+            install_graph_interaction_guard(
+                "importance_graph",
+                palette,
+                infopanel_title_field="name",
+                managed_selected_node_id="S'1",
+            )
+
+        script = html.call_args.args[0]
+        self.assertIn('const INFO_TITLE_FIELD = "name";', script)
+        self.assertIn('const MANAGED_SELECTED_NODE_ID = "S\'1";', script)
+        self.assertIn("overflow-wrap: anywhere", script)
+        self.assertIn("word-break: break-word", script)
+        self.assertIn("selected.data(field) || selected.id()", script)
+        self.assertIn("previousNode.unselect()", script)
+        self.assertIn("cyContainer.style.marginLeft", script)
+        self.assertIn("cy.fit(undefined, 45)", script)
+
+    def test_default_graph_guard_leaves_infopanel_unmanaged(self):
+        """Keep other graphs on the component's native panel behaviour.
+
+        Returns
+        -------
+        None
+            Assertions fail if default arguments enable panel management.
+
+        Examples
+        --------
+        >>> ImportanceGraphTests(
+        ...     "test_default_graph_guard_leaves_infopanel_unmanaged"
+        ... ).run().wasSuccessful()
+        True
+        """
+        palette = {
+            "surface": "#ffffff",
+            "text": "#111111",
+            "border": "#dddddd",
+            "focus": "#336699",
+            "shadow": "#00000033",
+        }
+
+        with patch("ui.graph_interaction.st_components.html") as html:
+            install_graph_interaction_guard("overview_graph", palette)
+
+        script = html.call_args.args[0]
+        self.assertIn("const INFO_TITLE_FIELD = null;", script)
+        self.assertIn("const MANAGED_SELECTED_NODE_ID = null;", script)
