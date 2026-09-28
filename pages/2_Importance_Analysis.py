@@ -188,27 +188,44 @@ with st.container(border=True):
             + ", ".join(zero_inputs)
             + ". ShapCRN uses its small absolute-value fallback for sweep values."
         )
+    requested_compute_config = {
+        "model_signature": signature,
+        "input_species_ids": tuple(inputs),
+        "variation_percentage": float(variation),
+        "level_count": int(levels),
+        "end_time": float(end_time),
+        "operation": "knockout" if mode == "KO" else "knockin",
+        "payoff": payoff,
+    }
+    cached_importance_config = st.session_state.get("importance_result_config")
+    cached_importance_result = st.session_state.get("importance_result")
+    importance_compute_matches = (
+        isinstance(cached_importance_config, dict)
+        and all(
+            cached_importance_config.get(key) == value
+            for key, value in requested_compute_config.items()
+        )
+    )
+    importance_covered = (
+        importance_compute_matches
+        and isinstance(cached_importance_result, importance.ImportanceAnalysisResult)
+        and set(players).issubset(cached_importance_config["knock_species_ids"])
+    )
     run = st.button(
-        "Compute Shapley values",
+        "✓ Cached result active" if importance_covered else "Compute Shapley values",
         type="primary",
         key="importance_run",
         disabled=model is None
         or not inputs
         or not targets
         or not players
-        or combinations > 2000,
+        or combinations > 2000
+        or importance_covered,
     )
 
-config = {
-    "model_signature": signature,
-    "input_species_ids": tuple(inputs),
-    "target_species_ids": tuple(targets),
+config = requested_compute_config | {
+    "target_species_ids": tuple(eligible),
     "knock_species_ids": tuple(players),
-    "variation_percentage": float(variation),
-    "level_count": int(levels),
-    "end_time": float(end_time),
-    "operation": "knockout" if mode == "KO" else "knockin",
-    "payoff": payoff,
 }
 if run:
     try:
@@ -223,20 +240,44 @@ if run:
             )
         st.session_state["importance_result"] = result
         st.session_state["importance_result_config"] = config
+        importance_compute_matches = True
+        importance_covered = True
     except Exception as exc:  # noqa: BLE001 — preserve the last successful result.
         st.error(f"Importance analysis failed: {exc}")
 
 result = st.session_state.get("importance_result")
 if isinstance(result, importance.ImportanceAnalysisResult):
     stored = st.session_state["importance_result_config"]
-    if stored != config:
+    if not importance_covered:
         st.info(
             "Analysis settings have changed. The charts still show the previous run."
         )
     st.caption(
-        f"Last run: {stored['operation']} · payoff {stored['payoff']} · "
+        f"Cached analysis: {stored['operation']} · payoff {stored['payoff']} · "
         f"end time {stored['end_time']:g} · {result.combination_count:,} combinations · "
         "levels " + ", ".join(f"{value:+g}%" for value in result.variation_levels)
+    )
+    displayed_targets = [
+        species_id for species_id in targets if species_id in result.shapley_values.columns
+    ]
+    displayed_players = [
+        species_id for species_id in players if species_id in result.shapley_values.index
+    ]
+    if not displayed_targets:
+        displayed_targets = list(result.shapley_values.columns)
+    if not displayed_players:
+        displayed_players = list(result.shapley_values.index)
+    result = importance.ImportanceAnalysisResult(
+        shapley_values=result.shapley_values.loc[
+            displayed_players,
+            displayed_targets,
+        ],
+        variations=result.variations.loc[
+            displayed_players,
+            displayed_targets,
+        ],
+        variation_levels=result.variation_levels,
+        combination_count=result.combination_count,
     )
     panel_heading(
         "Shapley Value Attribution",

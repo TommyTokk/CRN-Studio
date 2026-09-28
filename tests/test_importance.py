@@ -377,6 +377,58 @@ class ImportanceTests(unittest.TestCase):
         self.assertNotIn("importance_result", app.session_state)
         self.assertEqual(len(app.get("plotly_chart")), 0)
 
+    def test_cached_target_and_player_subsets_do_not_rerun_analysis(self):
+        """Filter cached importance matrices without calling ShapCRN again.
+
+        Returns
+        -------
+        None
+            Assertions verify target/player slicing and cached button state.
+
+        Examples
+        --------
+        >>> ImportanceTests(
+        ...     'test_cached_target_and_player_subsets_do_not_rerun_analysis'
+        ... ).run().wasSuccessful()
+        True
+        """
+        app = configured_app()
+        frame = pd.DataFrame(
+            {"S2": [np.nan, -2.5], "S3": [4.0, np.nan]},
+            index=["S2", "S3"],
+        )
+        result = importance.ImportanceAnalysisResult(
+            frame,
+            frame.abs(),
+            (-20.0, 0.0, 20.0),
+            3,
+        )
+        app.multiselect(key="importance_targets").set_value(["S2"]).run()
+        with patch.object(
+            importance,
+            "run_importance_analysis",
+            return_value=result,
+        ) as initial_run:
+            app.button(key="importance_run").click().run()
+        self.assertEqual(
+            initial_run.call_args.kwargs["target_species_ids"],
+            ("S2", "S3"),
+        )
+
+        with patch.object(importance, "run_importance_analysis") as run:
+            app.multiselect(key="importance_targets").set_value(["S3"]).run()
+            app.multiselect(key="importance_players").set_value(["S3"]).run()
+
+        run.assert_not_called()
+        self.assertTrue(app.button(key="importance_run").disabled)
+        self.assertEqual([tab.label for tab in app.tabs], ["S3 — Reporter"])
+        heatmap = next(
+            json.loads(chart.proto.spec)
+            for chart in app.get("plotly_chart")
+            if chart.key == "importance_heatmap_shapley"
+        )
+        self.assertEqual(heatmap["data"][0]["y"], ["S3 — Reporter"])
+
     def test_summary_cards_handle_ties_zeroes_and_missing_values(self):
         """Render explicit summaries for tied, zero, and unavailable results.
 
@@ -429,6 +481,7 @@ class ImportanceTests(unittest.TestCase):
             (-20.0, 0.0, 20.0),
             3,
         )
+        app.selectbox(key="importance_payoff").set_value("max").run()
         with patch.object(
             importance, "run_importance_analysis", return_value=missing
         ):

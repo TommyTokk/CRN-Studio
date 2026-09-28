@@ -827,8 +827,39 @@ def _render_phase_tab(
     source_signature: tuple[object, ...] = (),
     unavailable_message: str,
     source_model: object | None = None,
+    display_end_time: float | None = None,
 ) -> None:
-    """Render one independently persisted phase-plot source tab."""
+    """Render an automatically refreshed phase-plot source tab.
+
+    Parameters
+    ----------
+    source_key, source_label : str
+        Stable state key and human-readable source label.
+    results : pandas.DataFrame or None
+        Cached source trajectory.
+    colnames : sequence of object or None
+        RoadRunner selections corresponding to trajectory columns.
+    revision : int
+        Source result revision used to identify derived phase data.
+    source_signature : tuple of object, default ()
+        Additional source identity values.
+    unavailable_message : str
+        Message shown when no cached trajectory exists.
+    source_model : object or None, optional
+        Model used to format species labels.
+    display_end_time : float or None, optional
+        Inclusive cached-trajectory view horizon.
+
+    Returns
+    -------
+    None
+        The function renders Streamlit elements and updates derived UI state.
+
+    Examples
+    --------
+    >>> callable(_render_phase_tab)
+    True
+    """
     source_available = isinstance(results, pd.DataFrame) and not results.empty
     available_species = (
         _trajectory_species_ids(results, colnames, source_model)
@@ -859,13 +890,12 @@ def _render_phase_tab(
         placeholder="Select two or three species",
     )
     valid_selection = len(selected_species) in (2, 3)
-    generate_plot = st.button(
-        "Generate phase plot",
-        type="primary",
+    st.button(
+        "Refresh phase plot",
         disabled=not source_available or not valid_selection,
         key=f"generate_phase_plot_{source_key}_button",
+        help="The phase plot already refreshes automatically when selections change.",
     )
-
     if not source_available:
         st.info(unavailable_message)
     elif not valid_selection:
@@ -877,12 +907,22 @@ def _render_phase_tab(
         int(revision),
         tuple(selected_species),
         tuple(source_signature),
+        display_end_time,
     )
-    if generate_plot and results is not None:
+    if source_available and valid_selection and results is not None:
         try:
+            view_results = (
+                exp.truncate_trajectory(
+                    results,
+                    display_end_time,
+                    time_column=results.columns[0],
+                )
+                if display_end_time is not None
+                else results
+            )
             phase_data_by_source[source_key] = exp.downsample_phase_trajectory(
                 exp.prepare_phase_trajectory(
-                    results,
+                    view_results,
                     selected_species,
                     column_selections=colnames,
                 ),
@@ -899,6 +939,9 @@ def _render_phase_tab(
             }
         except Exception as exc:
             st.error(f"Phase plot generation failed: {exc}")
+    else:
+        phase_data_by_source.pop(source_key, None)
+        phase_config_by_source.pop(source_key, None)
 
     stored_data = phase_data_by_source.get(source_key)
     stored_config = phase_config_by_source.get(source_key)
@@ -907,11 +950,6 @@ def _render_phase_tab(
         and not stored_data.empty
         and isinstance(stored_config, dict)
     ):
-        if stored_config.get("signature") != current_signature:
-            st.info(
-                "Phase plot selections or source data have changed. The chart "
-                "still shows the previously generated trajectory."
-            )
         st.plotly_chart(
             _phase_figure(stored_data, stored_config),
             width="stretch",
@@ -926,7 +964,7 @@ def _render_phase_tab(
     else:
         placeholder(
             "3D phase trajectory",
-            "SELECT TWO OR THREE SPECIES, THEN GENERATE THE PLOT.",
+            "SELECT TWO OR THREE SPECIES TO DISPLAY THE PLOT.",
             min_height=300,
         )
 
@@ -949,6 +987,8 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
         "phase_plot_config_by_source",
         "phase_plot_species_simulation",
         "phase_plot_species_knock",
+        "simulation_display_species",
+        "knock_display_species",
         "phase_plot_species_perturbation",
         "phase_perturbation_selector_revision",
         "phase_perturbation_selection_revision",
@@ -1083,10 +1123,26 @@ with config:
             key="simulation_scan_parameter",
         )
 
+    cached_simulation_config = st.session_state.get("simulation_config")
+    cached_simulation_results = st.session_state.get("simulation_results")
+    simulation_compute_matches = (
+        isinstance(cached_simulation_config, dict)
+        and cached_simulation_config.get("mode") == simulation_mode
+        and cached_simulation_config.get("rtol") == rtol
+        and cached_simulation_config.get("atol") == atol
+        and cached_simulation_config.get("scan_enabled") == scan_enabled
+        and cached_simulation_config.get("scan_parameter") == scan_note
+    )
+    simulation_covered = (
+        simulation_compute_matches
+        and isinstance(cached_simulation_results, pd.DataFrame)
+        and not cached_simulation_results.empty
+        and float(end_time) <= float(cached_simulation_config["end_time"])
+    )
     run_simulation = st.button(
-        "▶ Run Simulation",
+        "✓ Cached result active" if simulation_covered else "▶ Run Simulation",
         type="primary",
-        disabled=not model_loaded,
+        disabled=not model_loaded or simulation_covered,
         key="run_simulation_button",
     )
 
@@ -1097,7 +1153,11 @@ with config:
 
 if model_loaded and run_simulation:
     try:
-        rr_model = load_roadrunner_model(st.session_state["shapcrn_loaded_model"])
+        rr_model = load_roadrunner_model(
+            st.session_state["shapcrn_loaded_model"],
+            rel_tol=float(rtol),
+            abs_tol=float(atol),
+        )
 
         if simulation_mode == STEADY_STATE_MODE:
             sim_res, steady_state_time, colnames = exp.simulate_with_steady_state(
@@ -1128,6 +1188,8 @@ if model_loaded and run_simulation:
                 "scan_parameter": scan_note,
             }
             st.session_state["simulation_result_revision"] += 1
+            simulation_compute_matches = True
+            simulation_covered = True
 
         else:
             st.warning("The simulation completed but returned no trajectory data.")
@@ -1152,17 +1214,7 @@ simulation_config = st.session_state.get("simulation_config")
 simulation_settings_changed = False
 
 if simulation_config is not None:
-    stored_mode = simulation_config.get("mode", ODE_MODE)
-    simulation_settings_changed = any(
-        [
-            stored_mode != simulation_mode,
-            simulation_config.get("end_time") != end_time,
-            simulation_config.get("rtol") != rtol,
-            simulation_config.get("atol") != atol,
-            simulation_config.get("scan_enabled") != scan_enabled,
-            simulation_config.get("scan_parameter") != scan_note,
-        ]
-    )
+    simulation_settings_changed = not simulation_covered
 
 
 # -----------------------------------------------------------------------------
@@ -1188,23 +1240,31 @@ with trajectory_panel:
     ):
         if simulation_config is not None:
             stored_mode = simulation_config.get("mode", ODE_MODE)
+            shown_end_time = min(float(end_time), float(simulation_config["end_time"]))
             st.caption(
-                "Last simulation: "
-                f"{stored_mode} · "
-                f"0–{simulation_config['end_time']} s"
+                f"Cached 0–{simulation_config['end_time']:g} s · "
+                f"showing 0–{shown_end_time:g} s · {stored_mode}"
             )
 
             if stored_mode == STEADY_STATE_MODE:
                 steady_state_time = simulation_config.get("steady_state_time")
-                if steady_state_time is not None:
+                if (
+                    steady_state_time is not None
+                    and float(steady_state_time) <= shown_end_time
+                ):
                     st.success(
                         "Steady state reached at "
                         f"t = {float(steady_state_time):g} s."
                     )
-                else:
+                elif steady_state_time is None:
                     st.warning(
                         "Steady state was not reached before the maximum time "
                         f"of {simulation_config['end_time']} s."
+                    )
+                else:
+                    st.info(
+                        "The cached run reaches steady state after the currently "
+                        "visible horizon."
                     )
 
         if simulation_settings_changed:
@@ -1213,10 +1273,52 @@ with trajectory_panel:
                 "The plot below still shows the previous simulation."
             )
 
-        simulation_display_df = _simulation_display_frame(
+        simulation_view = exp.truncate_trajectory(
             res_df,
+            shown_end_time,
+            time_column=res_df.columns[0],
+        )
+        available_display_species = _trajectory_species_ids(
+            simulation_view,
             simulation_colnames,
         )
+        previous_display_species = st.session_state.get(
+            "simulation_display_species",
+            available_display_species,
+        )
+        valid_display_species = [
+            species_id
+            for species_id in previous_display_species
+            if species_id in available_display_species
+        ]
+        if "simulation_display_species" not in st.session_state:
+            valid_display_species = available_display_species
+            st.session_state["simulation_display_species"] = valid_display_species
+        elif valid_display_species != previous_display_species:
+            st.session_state["simulation_display_species"] = valid_display_species
+        selected_display_species = st.multiselect(
+            "Species to display",
+            available_display_species,
+            format_func=lambda species_id: _model_entity_label(species_id, "Species"),
+            key="simulation_display_species",
+        )
+        if not selected_display_species:
+            st.info("Select at least one species to display the trajectory.")
+            simulation_display_df = simulation_view.iloc[:, [0]].copy()
+        else:
+            selected_simulation_view = exp.select_trajectory_species(
+                simulation_view,
+                selected_display_species,
+                column_selections=simulation_colnames,
+            )
+            selected_colnames = [
+                simulation_colnames[simulation_view.columns.get_loc(column)]
+                for column in selected_simulation_view.columns
+            ]
+            simulation_display_df = _simulation_display_frame(
+                selected_simulation_view,
+                selected_colnames,
+            )
         fig = px.line(
             simulation_display_df,
             x=simulation_display_df.columns[0],
@@ -1322,10 +1424,38 @@ with knock_panel:
             key="knock_end_time",
         )
 
+    ordered_knock_entities = tuple(
+        entity_id
+        for entity_id in knock_entity_options
+        if entity_id in selected_knock_entities
+    )
+    cached_knock_config = st.session_state.get("knock_config")
+    cached_knock_results = st.session_state.get("knock_results")
+    requested_knock_compute = {
+        "model_signature": model_signature,
+        "operation": knock_operation,
+        "entity_type": knock_entity_type,
+        "entity_ids": ordered_knock_entities,
+        "rtol": float(rtol),
+        "atol": float(atol),
+    }
+    knock_compute_matches = (
+        isinstance(cached_knock_config, dict)
+        and all(
+            cached_knock_config.get(key) == value
+            for key, value in requested_knock_compute.items()
+        )
+    )
+    knock_covered = (
+        knock_compute_matches
+        and isinstance(cached_knock_results, pd.DataFrame)
+        and not cached_knock_results.empty
+        and float(knock_end_time) <= float(cached_knock_config["end_time"])
+    )
     run_knock = st.button(
-        "Run knock experiment",
+        "✓ Cached result active" if knock_covered else "Run knock experiment",
         type="primary",
-        disabled=not model_loaded or not selected_knock_entities,
+        disabled=not model_loaded or not selected_knock_entities or knock_covered,
         key="run_knock_button",
     )
 
@@ -1335,7 +1465,7 @@ with knock_panel:
                 loaded_model,
                 operation=knock_operation,
                 entity_type=knock_entity_type,
-                entity_ids=selected_knock_entities,
+                entity_ids=ordered_knock_entities,
                 end_time=float(knock_end_time),
                 rel_tol=float(rtol),
                 abs_tol=float(atol),
@@ -1362,30 +1492,23 @@ with knock_panel:
                 "model_signature": model_signature,
                 "operation": knock_operation,
                 "entity_type": knock_entity_type,
-                "entity_ids": tuple(selected_knock_entities),
+                "entity_ids": ordered_knock_entities,
                 "end_time": float(knock_end_time),
                 "rtol": float(rtol),
                 "atol": float(atol),
             }
             st.session_state["knock_result_revision"] = next_knock_revision
+            knock_compute_matches = True
+            knock_covered = True
         except Exception as exc:
             st.error(f"Knock experiment failed: {exc}")
 
     knock_results = st.session_state.get("knock_results")
     knock_modified_model = st.session_state.get("knock_modified_model")
     knock_config = st.session_state.get("knock_config")
-    current_knock_config = {
-        "model_signature": model_signature,
-        "operation": knock_operation,
-        "entity_type": knock_entity_type,
-        "entity_ids": tuple(selected_knock_entities),
-        "end_time": float(knock_end_time),
-        "rtol": float(rtol),
-        "atol": float(atol),
-    }
 
     if isinstance(knock_results, pd.DataFrame) and not knock_results.empty:
-        if knock_config != current_knock_config:
+        if not knock_covered:
             st.info(
                 "Knock settings have changed. The chart still shows the previous run."
             )
@@ -1396,18 +1519,67 @@ with knock_panel:
                 (knock_config.get("entity_id"),),
             )
         )
-        st.caption(
-            f"Last run: {knock_config['operation']} · "
-            f"{knock_config['entity_type']} "
-            f"{', '.join(filter(None, stored_knock_entities))} · "
-            f"0–{knock_config['end_time']:g} s"
+        shown_knock_end_time = min(
+            float(knock_end_time),
+            float(knock_config["end_time"]),
         )
-        knock_fig = px.line(
+        st.caption(
+            f"Cached 0–{knock_config['end_time']:g} s · "
+            f"showing 0–{shown_knock_end_time:g} s · "
+            f"{knock_config['operation']} · "
+            f"{knock_config['entity_type']} "
+            f"{', '.join(filter(None, stored_knock_entities))}"
+        )
+        knock_view = exp.truncate_trajectory(
             knock_results,
-            x=knock_results.columns[0],
-            y=knock_results.columns[1:],
+            shown_knock_end_time,
+            time_column=knock_results.columns[0],
+        )
+        knock_colnames = list(knock_results.columns)
+        available_knock_species = _trajectory_species_ids(
+            knock_view,
+            knock_colnames,
+            knock_modified_model,
+        )
+        previous_knock_species = st.session_state.get(
+            "knock_display_species",
+            available_knock_species,
+        )
+        valid_knock_species = [
+            species_id
+            for species_id in previous_knock_species
+            if species_id in available_knock_species
+        ]
+        if "knock_display_species" not in st.session_state:
+            valid_knock_species = available_knock_species
+            st.session_state["knock_display_species"] = valid_knock_species
+        elif valid_knock_species != previous_knock_species:
+            st.session_state["knock_display_species"] = valid_knock_species
+        selected_knock_species = st.multiselect(
+            "Species to display",
+            available_knock_species,
+            format_func=lambda species_id: _model_entity_label(
+                species_id,
+                "Species",
+                knock_modified_model,
+            ),
+            key="knock_display_species",
+        )
+        if selected_knock_species:
+            knock_view = exp.select_trajectory_species(
+                knock_view,
+                selected_knock_species,
+                column_selections=knock_colnames,
+            )
+        else:
+            st.info("Select at least one species to display the trajectory.")
+            knock_view = knock_view.iloc[:, [0]].copy()
+        knock_fig = px.line(
+            knock_view,
+            x=knock_view.columns[0],
+            y=knock_view.columns[1:],
             labels={
-                knock_results.columns[0]: "Time (s)",
+                knock_view.columns[0]: "Time (s)",
                 "value": "Concentration / amount (SBML units)",
                 "variable": "Species",
             },
@@ -1631,8 +1803,36 @@ with perturbation_panel:
             "absolute-value fallback for their sweep values."
         )
 
+    cached_sweep_config = st.session_state.get("perturbation_sweep_config")
+    cached_sweep_result = st.session_state.get("perturbation_sweep_result")
+    requested_sweep_compute = {
+        "model_signature": model_signature,
+        "model_source": perturbation_source_key,
+        "knock_revision": (
+            st.session_state["knock_result_revision"]
+            if perturbation_source_key == "post-knock"
+            else None
+        ),
+        "input_species_ids": tuple(selected_input_species),
+        "variation": float(perturbation_variation),
+        "level_count": int(perturbation_levels),
+        "rtol": float(rtol),
+        "atol": float(atol),
+    }
+    sweep_compute_matches = (
+        isinstance(cached_sweep_config, dict)
+        and all(
+            cached_sweep_config.get(key) == value
+            for key, value in requested_sweep_compute.items()
+        )
+    )
+    sweep_covered = (
+        sweep_compute_matches
+        and isinstance(cached_sweep_result, exp.PerturbationSweepResult)
+        and float(perturbation_end_time) <= float(cached_sweep_config["end_time"])
+    )
     run_perturbation = st.button(
-        "Run perturbation sweep",
+        "✓ Cached result active" if sweep_covered else "Run perturbation sweep",
         type="primary",
         disabled=(
             perturbation_model is None
@@ -1640,6 +1840,7 @@ with perturbation_panel:
             or not selected_target_species
             or combinations_exceeded
             or trajectory_memory_exceeded
+            or sweep_covered
         ),
         key="run_perturbation_sweep_button",
     )
@@ -1663,7 +1864,7 @@ with perturbation_panel:
                     sweep_result = exp.run_perturbation_sweep(
                         perturbation_model,
                         input_species_ids=selected_input_species,
-                        target_species_ids=selected_target_species,
+                        target_species_ids=observable_species,
                         variation_percentage=float(perturbation_variation),
                         level_count=int(perturbation_levels),
                         end_time=float(perturbation_end_time),
@@ -1684,7 +1885,7 @@ with perturbation_panel:
                         else None
                     ),
                     "input_species_ids": tuple(selected_input_species),
-                    "target_species_ids": tuple(selected_target_species),
+                    "target_species_ids": tuple(observable_species),
                     "variation": float(perturbation_variation),
                     "level_count": int(perturbation_levels),
                     "end_time": float(perturbation_end_time),
@@ -1692,6 +1893,8 @@ with perturbation_panel:
                     "atol": float(atol),
                 }
                 st.session_state["perturbation_result_revision"] += 1
+                sweep_compute_matches = True
+                sweep_covered = True
             except Exception as exc:
                 sweep_error = exc
 
@@ -1700,25 +1903,8 @@ with perturbation_panel:
 
         sweep_result = st.session_state.get("perturbation_sweep_result")
         sweep_config = st.session_state.get("perturbation_sweep_config")
-        current_sweep_config = {
-            "model_signature": model_signature,
-            "model_source": perturbation_source_key,
-            "knock_revision": (
-                st.session_state["knock_result_revision"]
-                if perturbation_source_key == "post-knock"
-                else None
-            ),
-            "input_species_ids": tuple(selected_input_species),
-            "target_species_ids": tuple(selected_target_species),
-            "variation": float(perturbation_variation),
-            "level_count": int(perturbation_levels),
-            "end_time": float(perturbation_end_time),
-            "rtol": float(rtol),
-            "atol": float(atol),
-        }
-
         if isinstance(sweep_result, exp.PerturbationSweepResult):
-            if sweep_config != current_sweep_config:
+            if not sweep_covered:
                 st.info(
                     "Perturbation settings have changed. "
                     "The chart still shows the previous run."
@@ -1729,11 +1915,33 @@ with perturbation_panel:
             )
             inputs_label = ", ".join(sweep_config["input_species_ids"])
             stored_sweep_source = sweep_config.get("model_source", "original")
+            shown_sweep_end_time = min(
+                float(perturbation_end_time),
+                float(sweep_config["end_time"]),
+            )
             st.caption(
-                f"Last run: {stored_sweep_source} model · "
+                f"Cached 0–{sweep_config['end_time']:g} s · "
+                f"showing 0–{shown_sweep_end_time:g} s · "
+                f"{stored_sweep_source} model · "
                 f"inputs {inputs_label} · "
                 f"{sweep_result.combination_count:,} combinations · "
                 f"levels {levels_label}"
+            )
+
+            displayed_sweep_targets = [
+                species_id
+                for species_id in selected_target_species
+                if species_id in sweep_result.species_selections
+            ]
+            displayed_envelopes = (
+                exp.build_perturbation_envelopes(
+                    sweep_result,
+                    displayed_sweep_targets,
+                    end_time=shown_sweep_end_time,
+                    abs_tol=float(sweep_config["atol"]),
+                )
+                if displayed_sweep_targets
+                else {}
             )
 
             target_tabs = st.tabs(
@@ -1747,16 +1955,16 @@ with perturbation_panel:
                             else loaded_model
                         ),
                     )
-                    for species_id in sweep_config["target_species_ids"]
+                    for species_id in displayed_sweep_targets
                 ]
             )
             for target_tab, species_id in zip(
                 target_tabs,
-                sweep_config["target_species_ids"],
+                displayed_sweep_targets,
                 strict=True,
             ):
                 with target_tab:
-                    envelope = sweep_result.envelopes[species_id]
+                    envelope = displayed_envelopes[species_id]
                     band_x = (
                         envelope["time"].tolist() + envelope["time"].iloc[::-1].tolist()
                     )
@@ -1882,6 +2090,11 @@ with phase_panel:
     )
 
     with standard_phase_tab:
+        simulation_phase_end = (
+            min(float(end_time), float(simulation_config["end_time"]))
+            if isinstance(simulation_config, dict)
+            else None
+        )
         _render_phase_tab(
             source_key="simulation",
             source_label="Standard simulation",
@@ -1892,9 +2105,15 @@ with phase_panel:
                 "Run a standard simulation before generating this phase plot."
             ),
             source_model=loaded_model,
+            display_end_time=simulation_phase_end,
         )
 
     with knock_phase_tab:
+        knock_phase_end = (
+            min(float(knock_end_time), float(knock_config["end_time"]))
+            if isinstance(knock_config, dict)
+            else None
+        )
         _render_phase_tab(
             source_key="knock",
             source_label="Knock experiment",
@@ -1913,6 +2132,7 @@ with phase_panel:
                 "Run a knock experiment before generating this phase plot."
             ),
             source_model=knock_modified_model,
+            display_end_time=knock_phase_end,
         )
 
     with perturbation_phase_tab:
@@ -2072,6 +2292,10 @@ with phase_panel:
 
         if comparison_available and len(selected_species) in (2, 3):
             try:
+                perturbation_phase_end = min(
+                    float(perturbation_end_time),
+                    float(sweep_config["end_time"]),
+                )
                 comparison = exp.prepare_phase_comparison(
                     reference_results,
                     selected_species,
@@ -2083,6 +2307,7 @@ with phase_panel:
                     ),
                     standard_column_selections=reference_colnames,
                     max_points=exp.PHASE_PLOT_MAX_POINTS,
+                    end_time=perturbation_phase_end,
                 )
                 species_labels = [
                     _model_entity_label(
