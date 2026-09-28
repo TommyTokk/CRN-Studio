@@ -2,12 +2,244 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import libsbml
 import networkx as nx
 import numpy as np
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class ImportanceGraphAnnotations:
+    """Store target-specific Shapley effects and highlighted network paths.
+
+    Parameters
+    ----------
+    player_effects : dict of str to str
+        Effect category for every knocked species.
+    node_effects : dict of str to str
+        Combined effect category for nodes on highlighted paths.
+    edge_effects : dict of tuple of str to str
+        Combined effect category for directed graph edges on highlighted paths.
+    secondary_edges : frozenset of tuple of str
+        Edges used only by fallback paths that ignore edge direction.
+    secondary_players : tuple of str
+        Players whose target connection required an undirected fallback path.
+    unreachable_players : tuple of str
+        Players disconnected from the target even when direction is ignored.
+
+    Examples
+    --------
+    >>> result = ImportanceGraphAnnotations({}, {}, {}, frozenset(), (), ())
+    >>> result.secondary_players
+    ()
+    """
+
+    player_effects: dict[str, str]
+    node_effects: dict[str, str]
+    edge_effects: dict[tuple[str, str], str]
+    secondary_edges: frozenset[tuple[str, str]]
+    secondary_players: tuple[str, ...]
+    unreachable_players: tuple[str, ...]
+
+
+def build_importance_graph_annotations(
+    graph: nx.DiGraph,
+    target_id: str,
+    shapley_scores: Mapping[str, float] | pd.Series,
+    operation: str,
+    neutral_atol: float = 1e-8,
+) -> ImportanceGraphAnnotations:
+    """Classify knock effects and find every shortest path to one target.
+
+    Directed paths are preferred. When a player cannot reach the target while
+    respecting edge direction, the function finds shortest paths in an undirected
+    view and marks their edges as secondary. Path unions are derived from BFS
+    distance maps, so equivalent paths are not enumerated individually.
+
+    Parameters
+    ----------
+    graph : networkx.DiGraph
+        Directed bipartite chemical-reaction network.
+    target_id : str
+        Species ID whose Shapley column is being visualized.
+    shapley_scores : mapping of str to float or pandas.Series
+        Raw Shapley values indexed by knocked species ID.
+    operation : str
+        Either ``knockout`` or ``knockin``.
+    neutral_atol : float, default 1e-8
+        Absolute magnitude at or below which an effect is neutral.
+
+    Returns
+    -------
+    ImportanceGraphAnnotations
+        Player classifications, path classifications, and fallback metadata.
+
+    Raises
+    ------
+    TypeError
+        If `graph` is not a directed NetworkX graph.
+    ValueError
+        If the target, operation, tolerance, or a player ID is invalid.
+
+    Examples
+    --------
+    >>> graph = nx.DiGraph([("A", "R"), ("R", "B")])
+    >>> result = build_importance_graph_annotations(
+    ...     graph, "B", {"A": 2.0}, "knockout"
+    ... )
+    >>> result.player_effects["A"]
+    'promoter'
+    >>> result.edge_effects[("A", "R")]
+    'promoter'
+    """
+    if not isinstance(graph, nx.DiGraph):
+        raise TypeError("A directed NetworkX graph is required.")
+    if target_id not in graph:
+        raise ValueError(f"Unknown target node: {target_id}")
+    if operation not in ("knockout", "knockin"):
+        raise ValueError("Operation must be 'knockout' or 'knockin'.")
+    if not np.isfinite(neutral_atol) or neutral_atol < 0:
+        raise ValueError("Neutral tolerance must be finite and non-negative.")
+
+    scores = dict(shapley_scores)
+    unknown_players = [player for player in scores if player not in graph]
+    if unknown_players:
+        raise ValueError(f"Unknown player node: {unknown_players[0]}")
+
+    player_effects: dict[str, str] = {}
+    node_memberships: defaultdict[str, set[str]] = defaultdict(set)
+    edge_memberships: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    edge_path_types: defaultdict[tuple[str, str], set[str]] = defaultdict(set)
+    secondary_players: list[str] = []
+    unreachable_players: list[str] = []
+
+    reversed_graph = graph.reverse(copy=False)
+    directed_to_target = nx.single_source_shortest_path_length(
+        reversed_graph, target_id
+    )
+    undirected_graph = graph.to_undirected(as_view=True)
+    undirected_to_target = nx.single_source_shortest_path_length(
+        undirected_graph, target_id
+    )
+
+    for player, raw_value in scores.items():
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            value = float("nan")
+
+        if not np.isfinite(value):
+            player_effects[player] = "unavailable"
+            continue
+        if abs(value) <= neutral_atol:
+            effect = "neutral"
+        else:
+            promotes_target = value > 0 if operation == "knockout" else value < 0
+            effect = "promoter" if promotes_target else "inhibitor"
+        player_effects[player] = effect
+
+        if player == target_id:
+            continue
+
+        directed_distance = directed_to_target.get(player)
+        if directed_distance is not None:
+            from_player = nx.single_source_shortest_path_length(
+                graph, player, cutoff=directed_distance
+            )
+            path_nodes = {
+                node
+                for node, source_distance in from_player.items()
+                if node in directed_to_target
+                and source_distance + directed_to_target[node] == directed_distance
+            }
+            path_edges = {
+                (source, target)
+                for source, target in graph.edges
+                if source in from_player
+                and target in directed_to_target
+                and from_player[source] + 1 + directed_to_target[target]
+                == directed_distance
+            }
+            path_type = "directed"
+        else:
+            fallback_distance = undirected_to_target.get(player)
+            if fallback_distance is None:
+                unreachable_players.append(player)
+                continue
+            secondary_players.append(player)
+            from_player = nx.single_source_shortest_path_length(
+                undirected_graph, player, cutoff=fallback_distance
+            )
+            path_nodes = {
+                node
+                for node, source_distance in from_player.items()
+                if node in undirected_to_target
+                and source_distance + undirected_to_target[node] == fallback_distance
+            }
+            path_edges = {
+                (source, target)
+                for source, target in graph.edges
+                if (
+                    source in from_player
+                    and target in undirected_to_target
+                    and from_player[source] + 1 + undirected_to_target[target]
+                    == fallback_distance
+                )
+                or (
+                    target in from_player
+                    and source in undirected_to_target
+                    and from_player[target] + 1 + undirected_to_target[source]
+                    == fallback_distance
+                )
+            }
+            path_type = "secondary"
+
+        for node in path_nodes:
+            node_memberships[node].add(effect)
+        for edge in path_edges:
+            edge_memberships[edge].add(effect)
+            edge_path_types[edge].add(path_type)
+
+    node_effects: dict[str, str] = {}
+    for node, effects in node_memberships.items():
+        if {"promoter", "inhibitor"}.issubset(effects):
+            node_effects[node] = "mixed"
+        elif "promoter" in effects:
+            node_effects[node] = "promoter"
+        elif "inhibitor" in effects:
+            node_effects[node] = "inhibitor"
+        else:
+            node_effects[node] = "neutral"
+
+    edge_effects: dict[tuple[str, str], str] = {}
+    for edge, effects in edge_memberships.items():
+        if {"promoter", "inhibitor"}.issubset(effects):
+            edge_effects[edge] = "mixed"
+        elif "promoter" in effects:
+            edge_effects[edge] = "promoter"
+        elif "inhibitor" in effects:
+            edge_effects[edge] = "inhibitor"
+        else:
+            edge_effects[edge] = "neutral"
+
+    secondary_edges = frozenset(
+        edge
+        for edge, path_types in edge_path_types.items()
+        if path_types == {"secondary"}
+    )
+    return ImportanceGraphAnnotations(
+        player_effects=player_effects,
+        node_effects=node_effects,
+        edge_effects=edge_effects,
+        secondary_edges=secondary_edges,
+        secondary_players=tuple(secondary_players),
+        unreachable_players=tuple(unreachable_players),
+    )
 
 
 def get_stoichiometric_matrix(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 import libsbml
+import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 from shapcrn.utils.utils import normalize_asinh
@@ -12,8 +13,10 @@ from shapcrn.utils.utils import normalize_asinh
 from logic import importance
 from logic.experiments import list_perturbable_species
 from logic.model import load_model
+from logic.network import build_importance_graph_annotations, build_network
 from ui.components import page_header, panel_heading, stat_card
-from ui.styles import apply_plotly_theme, get_theme_palette
+from ui.importance_graph import LAYOUT_OPTIONS, render_importance_graph
+from ui.styles import apply_plotly_theme, current_theme, get_theme_palette
 
 THEME_PALETTE = get_theme_palette()
 
@@ -442,6 +445,171 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                     key=f"importance_bar_{target}",
                     config={"displaylogo": False},
                 )
+
+    with st.container(border=True):
+        panel_heading(
+            "Target Influence Network",
+            "Full topology with target-specific knock effects and shortest paths",
+        )
+        if st.session_state.get("importance_graph_target") not in result_targets:
+            st.session_state["importance_graph_target"] = result_targets[0]
+        if st.session_state.get("importance_graph_layout") not in LAYOUT_OPTIONS:
+            st.session_state["importance_graph_layout"] = "Hierarchical"
+
+        graph_controls = st.columns(2)
+        with graph_controls[0]:
+            graph_target = st.selectbox(
+                "Network target",
+                result_targets,
+                format_func=labels.get,
+                key="importance_graph_target",
+            )
+        with graph_controls[1]:
+            graph_layout = st.selectbox(
+                "Network layout",
+                LAYOUT_OPTIONS,
+                key="importance_graph_layout",
+            )
+
+        st.markdown(
+            f"""
+            <div style="display:flex;flex-wrap:wrap;gap:.55rem 1rem;align-items:center;
+                        padding:.6rem .7rem;border:1px solid var(--border);
+                        border-radius:8px;background:var(--paper);font-size:.74rem;">
+              <span><span style="color:{THEME_PALETTE['data_1']}">●</span> Target</span>
+              <span><span style="color:{THEME_PALETTE['positive']}">●</span> Promoter</span>
+              <span><span style="color:{THEME_PALETTE['negative']}">●</span> Inhibitor</span>
+              <span><span style="color:{THEME_PALETTE['amber']}">●</span> Neutral (|Shapley| ≤ 1e-8)</span>
+              <span><span style="color:{THEME_PALETTE['data_8']}">◌</span> N/A</span>
+              <span><span style="color:{THEME_PALETTE['data_4']}">━━</span> Mixed path</span>
+              <span><span style="color:{THEME_PALETTE['graph_edge']}">┄┄</span> Secondary path</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        try:
+            network_graph = build_network(model)
+            graph_scores = result.shapley_values[graph_target]
+            annotations = build_importance_graph_annotations(
+                network_graph,
+                graph_target,
+                graph_scores,
+                stored["operation"],
+            )
+            selected_player = st.session_state.get(
+                "importance_graph_selected_player"
+            )
+            if (
+                st.session_state.get("importance_graph_focus_target")
+                != graph_target
+                or selected_player not in graph_scores.index
+            ):
+                selected_player = None
+                st.session_state["importance_graph_selected_player"] = None
+            st.session_state["importance_graph_focus_target"] = graph_target
+
+            focused_annotations = None
+            if selected_player is not None:
+                focused_annotations = build_importance_graph_annotations(
+                    network_graph,
+                    graph_target,
+                    {selected_player: graph_scores[selected_player]},
+                    stored["operation"],
+                )
+            graph_key_token = hashlib.sha1(
+                f"{graph_target}|{graph_layout}".encode("utf-8")
+            ).hexdigest()[:10]
+            graph_event = render_importance_graph(
+                network_graph,
+                annotations,
+                graph_target,
+                graph_scores,
+                stored["operation"],
+                graph_layout,
+                THEME_PALETTE,
+                (
+                    f"importance_target_graph_{signature[:12]}_"
+                    f"{graph_key_token}_{current_theme()}"
+                ),
+                focused_annotations,
+                selected_player,
+            )
+
+            event_timestamp = (
+                graph_event.get("timestamp") if graph_event is not None else None
+            )
+            event_data = (
+                graph_event.get("data", {}) if graph_event is not None else {}
+            )
+            tapped_player = event_data.get("target_id")
+            if (
+                graph_event is not None
+                and graph_event.get("action") == "importance_knock_tap"
+                and tapped_player in graph_scores.index
+                and event_timestamp
+                != st.session_state.get("importance_graph_event_timestamp")
+            ):
+                st.session_state["importance_graph_event_timestamp"] = event_timestamp
+                st.session_state["importance_graph_selected_player"] = (
+                    None if tapped_player == selected_player else tapped_player
+                )
+                st.rerun()
+
+            if selected_player is not None and focused_annotations is not None:
+                raw_value = float(graph_scores[selected_player])
+                effect = focused_annotations.player_effects[selected_player]
+                effect_label = {
+                    "promoter": "Promoter",
+                    "inhibitor": "Inhibitor",
+                    "neutral": "Neutral",
+                    "unavailable": "N/A",
+                }[effect]
+                shapley_label = (
+                    f"{raw_value:.8g}" if np.isfinite(raw_value) else "N/A"
+                )
+                if selected_player in focused_annotations.secondary_players:
+                    path_label = "undirected topological fallback"
+                elif (
+                    selected_player in focused_annotations.unreachable_players
+                    or not focused_annotations.edge_effects
+                ):
+                    path_label = "no path to the target"
+                else:
+                    path_label = "directed shortest path"
+                operation_label = (
+                    "KO" if stored["operation"] == "knockout" else "KI"
+                )
+                st.info(
+                    f"Selected knock: {labels.get(selected_player, selected_player)} · "
+                    f"{effect_label} · {operation_label} · "
+                    f"Shapley {shapley_label} · {path_label}."
+                )
+
+            if annotations.secondary_players:
+                st.caption(
+                    "Dashed paths ignore edge direction and indicate topological, "
+                    "not necessarily causal, connections for: "
+                    + ", ".join(
+                        labels.get(player, player)
+                        for player in annotations.secondary_players
+                    )
+                )
+            if annotations.unreachable_players:
+                st.warning(
+                    "No topological path to this target was found for: "
+                    + ", ".join(
+                        labels.get(player, player)
+                        for player in annotations.unreachable_players
+                    )
+                    + ". Their knock nodes remain classified by Shapley value."
+                )
+            st.caption(
+                "Promoter/inhibitor describes the observed KO/KI payoff effect. "
+                "Click a knocked species to focus all of its shortest paths."
+            )
+        except Exception as exc:  # noqa: BLE001 — keep numerical results usable.
+            st.error(f"The target influence network could not be rendered: {exc}")
 
     normalized, scale = normalize_asinh(result.shapley_values)
     for name, raw, colored in (

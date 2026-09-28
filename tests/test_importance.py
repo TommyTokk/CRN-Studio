@@ -7,12 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import libsbml
+import networkx as nx
 import numpy as np
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from logic import importance
 from logic.experiments import sim_ut
+from logic.network import build_importance_graph_annotations
+from ui.importance_graph import build_importance_cytoscape_elements
 
 PAGE = Path(__file__).parents[1] / "pages" / "2_Importance_Analysis.py"
 
@@ -97,6 +100,44 @@ def configured_app():
     app.multiselect(key="importance_inputs").set_value(["S1"]).run()
     app.multiselect(key="importance_targets").set_value(["S2", "S3"]).run()
     return app
+
+
+def importance_graph_fixture() -> nx.DiGraph:
+    """Build a graph with alternate, shared, fallback, and disconnected paths.
+
+    Returns
+    -------
+    networkx.DiGraph
+        Directed graph containing species-like and reaction-like test nodes.
+
+    Examples
+    --------
+    >>> graph = importance_graph_fixture()
+    >>> graph.has_edge("P", "A")
+    True
+    """
+    graph = nx.DiGraph()
+    species = ("P", "I", "N", "U", "D", "X", "Q", "T")
+    reactions = ("A", "B")
+    for node in species:
+        graph.add_node(node, label=node, node_type="species")
+    for node in reactions:
+        graph.add_node(node, label=node, node_type="reaction")
+    graph.add_edges_from(
+        (
+            ("P", "A"),
+            ("A", "T"),
+            ("P", "B"),
+            ("B", "T"),
+            ("I", "A"),
+            ("N", "A"),
+            ("T", "U"),
+        )
+    )
+    for source, target in graph.edges:
+        graph.edges[source, target]["role"] = "product"
+        graph.edges[source, target]["stoichiometry"] = 1.0
+    return graph
 
 
 class ImportanceTests(unittest.TestCase):
@@ -429,6 +470,136 @@ class ImportanceTests(unittest.TestCase):
         )
         self.assertEqual(heatmap["data"][0]["y"], ["S3 — Reporter"])
 
+    def test_graph_controls_use_cached_results_without_recomputation(self):
+        """Switch graph target and layout without rerunning ShapCRN.
+
+        Returns
+        -------
+        None
+            The graph must use the cached operation and render one canvas only.
+
+        Examples
+        --------
+        >>> ImportanceTests(
+        ...     'test_graph_controls_use_cached_results_without_recomputation'
+        ... ).run().wasSuccessful()
+        True
+        """
+        app = configured_app()
+        frame = pd.DataFrame(
+            {"S2": [np.nan, -2.5], "S3": [4.0, np.nan]},
+            index=["S2", "S3"],
+        )
+        result = importance.ImportanceAnalysisResult(
+            frame,
+            frame.abs(),
+            (-20.0, 0.0, 20.0),
+            3,
+        )
+        with patch.object(
+            importance, "run_importance_analysis", return_value=result
+        ):
+            app.button(key="importance_run").click().run()
+
+        self.assertEqual(
+            app.selectbox(key="importance_graph_target").value,
+            "S2",
+        )
+        self.assertEqual(
+            app.selectbox(key="importance_graph_layout").value,
+            "Hierarchical",
+        )
+        self.assertEqual(len(app.get("component_instance")), 1)
+
+        with (
+            patch.object(importance, "run_importance_analysis") as run,
+            patch(
+                "ui.importance_graph.render_importance_graph",
+                return_value=True,
+            ) as render,
+        ):
+            app.selectbox(key="importance_graph_target").set_value("S3").run()
+            app.selectbox(key="importance_graph_layout").set_value("Circular").run()
+            app.radio(key="importance_operation").set_value("KI").run()
+
+        run.assert_not_called()
+        self.assertEqual(app.session_state["importance_graph_target"], "S3")
+        self.assertEqual(app.session_state["importance_graph_layout"], "Circular")
+        self.assertEqual(render.call_args.args[4], "knockout")
+
+    def test_graph_knock_events_toggle_focus_and_follow_target_state(self):
+        """Persist graph focus across layouts and reset it for a new target.
+
+        Returns
+        -------
+        None
+            Tap events must update only view state without rerunning ShapCRN.
+
+        Examples
+        --------
+        >>> ImportanceTests(
+        ...     'test_graph_knock_events_toggle_focus_and_follow_target_state'
+        ... ).run().wasSuccessful()
+        True
+        """
+        app = configured_app()
+        frame = pd.DataFrame(
+            {"S2": [np.nan, -2.5], "S3": [4.0, np.nan]},
+            index=["S2", "S3"],
+        )
+        result = importance.ImportanceAnalysisResult(
+            frame,
+            frame.abs(),
+            (-20.0, 0.0, 20.0),
+            3,
+        )
+        with patch.object(
+            importance, "run_importance_analysis", return_value=result
+        ):
+            app.button(key="importance_run").click().run()
+
+        tap = {
+            "action": "importance_knock_tap",
+            "data": {"target_id": "S3", "target_group": "nodes"},
+            "timestamp": 1,
+        }
+        with (
+            patch.object(importance, "run_importance_analysis") as run,
+            patch("ui.importance_graph.render_importance_graph", return_value=tap),
+        ):
+            app.run()
+        run.assert_not_called()
+        self.assertEqual(
+            app.session_state["importance_graph_selected_player"], "S3"
+        )
+        self.assertEqual(app.session_state["importance_graph_event_timestamp"], 1)
+        with patch("ui.importance_graph.render_importance_graph", return_value=None):
+            app.run()
+        selected_summary = "\n".join(item.value for item in app.info)
+        self.assertIn("S3 — Reporter", selected_summary)
+        self.assertIn("Inhibitor · KO · Shapley -2.5", selected_summary)
+
+        with patch(
+            "ui.importance_graph.render_importance_graph", return_value=None
+        ) as render:
+            app.selectbox(key="importance_graph_layout").set_value("Circular").run()
+        self.assertEqual(
+            app.session_state["importance_graph_selected_player"], "S3"
+        )
+        self.assertIsNotNone(render.call_args.args[8])
+        self.assertEqual(render.call_args.args[9], "S3")
+
+        tap["timestamp"] = 2
+        with patch("ui.importance_graph.render_importance_graph", return_value=tap):
+            app.run()
+        self.assertIsNone(app.session_state["importance_graph_selected_player"])
+
+        app.session_state["importance_graph_selected_player"] = "S3"
+        app.session_state["importance_graph_focus_target"] = "S2"
+        with patch("ui.importance_graph.render_importance_graph", return_value=None):
+            app.selectbox(key="importance_graph_target").set_value("S3").run()
+        self.assertIsNone(app.session_state["importance_graph_selected_player"])
+
     def test_summary_cards_handle_ties_zeroes_and_missing_values(self):
         """Render explicit summaries for tied, zero, and unavailable results.
 
@@ -526,3 +697,246 @@ class ImportanceTests(unittest.TestCase):
         del app.session_state["shapcrn_model_bytes"]
         app.run()
         self.assertTrue(app.button(key="importance_run").disabled)
+
+
+class ImportanceGraphTests(unittest.TestCase):
+    """Verify effect semantics, efficient path unions, and visual categories.
+
+    Examples
+    --------
+    >>> suite = unittest.defaultTestLoader.loadTestsFromTestCase(ImportanceGraphTests)
+    >>> suite.countTestCases()
+    4
+    """
+
+    def test_effects_shortest_paths_fallbacks_and_overlaps(self):
+        """Classify players and combine every relevant shortest path.
+
+        Returns
+        -------
+        None
+            Assertions fail if path or overlap semantics change.
+
+        Examples
+        --------
+        >>> ImportanceGraphTests(
+        ...     'test_effects_shortest_paths_fallbacks_and_overlaps'
+        ... ).run().wasSuccessful()
+        True
+        """
+        graph = importance_graph_fixture()
+        scores = {
+            "P": 2.0,
+            "I": -2.0,
+            "N": 1e-9,
+            "U": 1.0,
+            "D": -1.0,
+            "X": np.nan,
+        }
+        result = build_importance_graph_annotations(
+            graph, "T", scores, "knockout"
+        )
+
+        self.assertEqual(result.player_effects["P"], "promoter")
+        self.assertEqual(result.player_effects["I"], "inhibitor")
+        self.assertEqual(result.player_effects["N"], "neutral")
+        self.assertEqual(result.player_effects["X"], "unavailable")
+        self.assertEqual(result.edge_effects[("P", "A")], "promoter")
+        self.assertEqual(result.edge_effects[("P", "B")], "promoter")
+        self.assertEqual(result.edge_effects[("A", "T")], "mixed")
+        self.assertEqual(result.node_effects["A"], "mixed")
+        self.assertEqual(result.edge_effects[("N", "A")], "neutral")
+        self.assertEqual(result.edge_effects[("T", "U")], "promoter")
+        self.assertEqual(result.secondary_edges, frozenset({("T", "U")}))
+        self.assertEqual(result.secondary_players, ("U",))
+        self.assertEqual(result.unreachable_players, ("D",))
+
+    def test_knockin_inverts_direction_and_rejects_invalid_inputs(self):
+        """Invert KI direction while retaining validation and N/A handling.
+
+        Returns
+        -------
+        None
+            Assertions fail if KI semantics or validation changes.
+
+        Examples
+        --------
+        >>> ImportanceGraphTests(
+        ...     'test_knockin_inverts_direction_and_rejects_invalid_inputs'
+        ... ).run().wasSuccessful()
+        True
+        """
+        graph = importance_graph_fixture()
+        result = build_importance_graph_annotations(
+            graph,
+            "T",
+            {"P": 2.0, "I": -2.0, "N": -1e-8, "X": np.inf},
+            "knockin",
+        )
+        self.assertEqual(result.player_effects["P"], "inhibitor")
+        self.assertEqual(result.player_effects["I"], "promoter")
+        self.assertEqual(result.player_effects["N"], "neutral")
+        self.assertEqual(result.player_effects["X"], "unavailable")
+
+        with self.assertRaisesRegex(ValueError, "Operation"):
+            build_importance_graph_annotations(graph, "T", {"P": 1.0}, "other")
+        with self.assertRaisesRegex(ValueError, "Unknown target"):
+            build_importance_graph_annotations(
+                graph, "missing", {"P": 1.0}, "knockout"
+            )
+        with self.assertRaisesRegex(ValueError, "Unknown player"):
+            build_importance_graph_annotations(
+                graph, "T", {"missing": 1.0}, "knockout"
+            )
+
+    def test_cytoscape_elements_keep_full_network_and_visual_roles(self):
+        """Retain background topology and expose effect-specific categories.
+
+        Returns
+        -------
+        None
+            Assertions fail if Cytoscape loses nodes, edges, or path metadata.
+
+        Examples
+        --------
+        >>> ImportanceGraphTests(
+        ...     'test_cytoscape_elements_keep_full_network_and_visual_roles'
+        ... ).run().wasSuccessful()
+        True
+        """
+        graph = importance_graph_fixture()
+        scores = {"P": 2.0, "I": -2.0, "U": 1.0, "X": np.nan}
+        annotations = build_importance_graph_annotations(
+            graph, "T", scores, "knockout"
+        )
+        elements = build_importance_cytoscape_elements(
+            graph,
+            annotations,
+            "T",
+            scores,
+            "knockout",
+            "Bipartite",
+        )
+        nodes = {node["data"]["id"]: node for node in elements["nodes"]}
+        edges = {
+            (edge["data"]["source"], edge["data"]["target"]): edge
+            for edge in elements["edges"]
+        }
+
+        self.assertEqual(len(nodes), graph.number_of_nodes())
+        self.assertEqual(len(edges), graph.number_of_edges())
+        self.assertEqual(nodes["T"]["data"]["label"], "TARGET")
+        self.assertEqual(nodes["P"]["data"]["label"], "KNOCK_PROMOTER")
+        self.assertEqual(nodes["I"]["data"]["label"], "KNOCK_INHIBITOR")
+        self.assertEqual(nodes["X"]["data"]["label"], "KNOCK_UNAVAILABLE")
+        self.assertEqual(nodes["Q"]["data"]["label"], "BACKGROUND_SPECIES")
+        self.assertIn("position", nodes["P"])
+        self.assertEqual(edges[("A", "T")]["data"]["label"], "PATH_MIXED")
+        self.assertEqual(
+            edges[("T", "U")]["data"]["label"], "SECONDARY_PROMOTER"
+        )
+        self.assertEqual(
+            edges[("T", "U")]["data"]["path_type"],
+            "Secondary undirected fallback",
+        )
+
+    def test_selected_knock_focuses_its_complete_path_union(self):
+        """Focus every shortest branch while dimming unrelated paths.
+
+        Returns
+        -------
+        None
+            The selected effect must override aggregate mixed path styling.
+
+        Examples
+        --------
+        >>> ImportanceGraphTests(
+        ...     'test_selected_knock_focuses_its_complete_path_union'
+        ... ).run().wasSuccessful()
+        True
+        """
+        graph = importance_graph_fixture()
+        scores = {"P": 2.0, "I": -2.0, "U": 1.0, "D": -1.0}
+        annotations = build_importance_graph_annotations(
+            graph, "T", scores, "knockout"
+        )
+        focused = build_importance_graph_annotations(
+            graph, "T", {"P": scores["P"]}, "knockout"
+        )
+        elements = build_importance_cytoscape_elements(
+            graph,
+            annotations,
+            "T",
+            scores,
+            "knockout",
+            "Hierarchical",
+            focused,
+            "P",
+        )
+        nodes = {node["data"]["id"]: node for node in elements["nodes"]}
+        edges = {
+            (edge["data"]["source"], edge["data"]["target"]): edge
+            for edge in elements["edges"]
+        }
+
+        self.assertEqual(nodes["P"]["data"]["label"], "FOCUSED_KNOCK_PROMOTER")
+        self.assertFalse(nodes["P"]["selectable"])
+        self.assertEqual(nodes["P"]["data"]["_is_knock"], "true")
+        self.assertEqual(nodes["T"]["data"]["label"], "FOCUSED_TARGET")
+        self.assertEqual(
+            nodes["I"]["data"]["label"], "DIMMED_KNOCK_INHIBITOR"
+        )
+        self.assertEqual(
+            edges[("P", "A")]["data"]["label"], "FOCUSED_PATH_PROMOTER"
+        )
+        self.assertEqual(
+            edges[("P", "B")]["data"]["label"], "FOCUSED_PATH_PROMOTER"
+        )
+        self.assertEqual(
+            edges[("A", "T")]["data"]["label"], "FOCUSED_PATH_PROMOTER"
+        )
+        self.assertEqual(
+            edges[("I", "A")]["data"]["label"], "DIMMED_PATH_INHIBITOR"
+        )
+
+        fallback = build_importance_graph_annotations(
+            graph, "T", {"U": scores["U"]}, "knockout"
+        )
+        fallback_elements = build_importance_cytoscape_elements(
+            graph,
+            annotations,
+            "T",
+            scores,
+            "knockout",
+            "Hierarchical",
+            fallback,
+            "U",
+        )
+        fallback_edges = {
+            (edge["data"]["source"], edge["data"]["target"]): edge
+            for edge in fallback_elements["edges"]
+        }
+        self.assertEqual(
+            fallback_edges[("T", "U")]["data"]["label"],
+            "FOCUSED_SECONDARY_PROMOTER",
+        )
+
+        disconnected = build_importance_graph_annotations(
+            graph, "T", {"D": scores["D"]}, "knockout"
+        )
+        disconnected_elements = build_importance_cytoscape_elements(
+            graph,
+            annotations,
+            "T",
+            scores,
+            "knockout",
+            "Hierarchical",
+            disconnected,
+            "D",
+        )
+        self.assertFalse(
+            any(
+                edge["data"]["label"].startswith("FOCUSED_")
+                for edge in disconnected_elements["edges"]
+            )
+        )
