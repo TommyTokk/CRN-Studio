@@ -20,13 +20,14 @@ from ui.styles import apply_plotly_theme, get_theme_palette
 THEME_PALETTE = get_theme_palette()
 STANDARD_GRADIENT = (THEME_PALETTE["data_1"], THEME_PALETTE["data_7"])
 KNOCK_GRADIENT = (THEME_PALETTE["data_2"], THEME_PALETTE["data_5"])
-PERTURBATION_GRADIENTS = tuple(
-    (
-        THEME_PALETTE[f"data_{start}"],
-        THEME_PALETTE[f"data_{end}"],
-    )
-    for start, end in ((1, 7), (3, 5), (2, 6), (4, 8), (7, 5), (6, 3), (8, 2))
-)
+PHASE_LINE_DASHES = ("solid", "dash", "dot", "dashdot")
+PHASE_LEGEND = {
+    "orientation": "h",
+    "x": 0.5,
+    "xanchor": "center",
+    "y": -0.32,
+    "yanchor": "top",
+}
 
 # -----------------------------------------------------------------------------
 # Page header
@@ -272,6 +273,7 @@ def _phase_figure(
             marker={
                 "size": 7,
                 "color": [THEME_PALETTE["data_3"], THEME_PALETTE["data_5"]],
+                "symbol": ["circle", "diamond"],
                 "line": {"color": "white", "width": 1},
             },
             hovertemplate=(
@@ -282,13 +284,8 @@ def _phase_figure(
     )
     figure.update_layout(
         title=f"{len(species_ids)}D Phase Trajectory — {source_label}",
-        legend={"orientation": "h"},
-        margin={"l": 0, "r": 0, "b": 0, "t": 55},
     )
-    figure.update_layout(
-        xaxis_title=species_labels[0],
-        yaxis_title=species_labels[1],
-    )
+    _apply_phase_2d_layout(figure, species_labels)
     return apply_plotly_theme(figure)
 
 
@@ -314,7 +311,79 @@ def _perturbation_color(trajectory_id: str) -> str:
         identifier = int(trajectory_id.removeprefix("P"))
     except ValueError:
         identifier = sum(ord(character) for character in trajectory_id)
-    return THEME_PALETTE[f"data_{((identifier - 1) % 8) + 1}"]
+    palette_indices = (2, 3, 4, 5, 6, 8)
+    color_index = palette_indices[(identifier - 1) % len(palette_indices)]
+    return THEME_PALETTE[f"data_{color_index}"]
+
+
+def _perturbation_dash(trajectory_id: str) -> str:
+    """Return a stable line pattern for a perturbation ID.
+
+    Parameters
+    ----------
+    trajectory_id : str
+        Stable trajectory identifier, normally formatted as ``P<number>``.
+
+    Returns
+    -------
+    str
+        Plotly dash style paired with the trajectory's stable colour.
+
+    Examples
+    --------
+    >>> _perturbation_dash("P0001")
+    'solid'
+    >>> _perturbation_dash("P0007")
+    'dash'
+    """
+    try:
+        identifier = int(trajectory_id.removeprefix("P"))
+    except ValueError:
+        identifier = sum(ord(character) for character in trajectory_id)
+    palette_size = 6
+    return PHASE_LINE_DASHES[
+        ((identifier - 1) // palette_size) % len(PHASE_LINE_DASHES)
+    ]
+
+
+def _apply_phase_2d_layout(
+    figure: go.Figure,
+    species_labels: Sequence[str],
+) -> None:
+    """Reserve separate space for 2D phase axes and the trajectory legend.
+
+    Parameters
+    ----------
+    figure : plotly.graph_objects.Figure
+        Phase-space figure to update in place.
+    species_labels : sequence of str
+        Human-readable labels for the X and Y axes.
+
+    Returns
+    -------
+    None
+        The supplied figure is updated in place.
+
+    Examples
+    --------
+    >>> fig = go.Figure()
+    >>> _apply_phase_2d_layout(fig, ("Substrate", "Product"))
+    >>> fig.layout.xaxis.title.text
+    'Substrate'
+    """
+    figure.update_layout(
+        height=600,
+        margin={"l": 90, "r": 30, "b": 175, "t": 70},
+        legend=PHASE_LEGEND,
+        xaxis={
+            "title": {"text": species_labels[0], "standoff": 18},
+            "automargin": True,
+        },
+        yaxis={
+            "title": {"text": species_labels[1], "standoff": 18},
+            "automargin": True,
+        },
+    )
 
 
 def _phase_perturbation_gradient(trajectory_id: str) -> tuple[str, str]:
@@ -339,9 +408,15 @@ def _phase_perturbation_gradient(trajectory_id: str) -> tuple[str, str]:
         identifier = int(trajectory_id.removeprefix("P"))
     except ValueError:
         identifier = sum(ord(character) for character in trajectory_id)
-    return PERTURBATION_GRADIENTS[
-        (identifier - 1) % len(PERTURBATION_GRADIENTS)
-    ]
+    gradient_colors = tuple(
+        THEME_PALETTE[f"data_{index}"] for index in (2, 3, 4, 5, 6, 8)
+    )
+    start_index = (identifier - 1) % len(gradient_colors)
+    offset = 1 + ((identifier - 1) // len(gradient_colors)) % (
+        len(gradient_colors) - 1
+    )
+    end_index = (start_index + offset) % len(gradient_colors)
+    return gradient_colors[start_index], gradient_colors[end_index]
 
 
 def _mesh_hover_template(
@@ -731,7 +806,11 @@ def _phase_comparison_figure(
                 customdata=frame["time"],
                 mode="lines",
                 name=metadata.label,
-                line={"color": color, "width": 1.75},
+                line={
+                    "color": color,
+                    "width": 1.75,
+                    "dash": _perturbation_dash(trajectory_id),
+                },
                 opacity=0.65,
                 hovertemplate=(
                     f"{metadata.label}<br>"
@@ -797,8 +876,6 @@ def _phase_comparison_figure(
 
     figure.update_layout(
         title=f"{reference_label} vs. Perturbation Phase Trajectories",
-        legend={"orientation": "h"},
-        margin={"l": 0, "r": 0, "b": 0, "t": 55},
     )
     if is_3d:
         figure.update_layout(
@@ -810,10 +887,7 @@ def _phase_comparison_figure(
             }
         )
     else:
-        figure.update_layout(
-            xaxis_title=species_labels[0],
-            yaxis_title=species_labels[1],
-        )
+        _apply_phase_2d_layout(figure, species_labels)
     return figure
 
 
@@ -2080,10 +2154,34 @@ st.write("")
 phase_panel = st.container(border=True)
 
 with phase_panel:
-    panel_heading(
-        "Phase Space Trajectory",
-        "Interactive 2D and 3D projections for standard, knock, and perturbation runs",
-    )
+    phase_heading, phase_help = st.columns([9, 1], vertical_alignment="top")
+    with phase_heading:
+        panel_heading(
+            "Phase Space Trajectory",
+            "Interactive 2D and 3D projections for standard, knock, and perturbation runs",
+        )
+    with phase_help:
+        with st.popover(
+            "?",
+            key="phase_space_interpretation_help",
+            help="How to interpret phase-space trajectories",
+        ):
+            st.markdown(
+                """
+                **How to read this plot**
+
+                Each curve shows how a simulation evolves over time in concentration
+                space; time is encoded along the curve rather than on an axis.
+
+                - The first selected species is **X**, the second is **Y**, and the
+                  optional third species is **Z**.
+                - **Standard** is the reference trajectory; the other curves show
+                  the selected perturbations.
+                - A **circle** marks the start and a **diamond** marks the end.
+                - Hover a curve or marker for exact concentrations and time. In 3D,
+                  the colour gradient also follows the trajectory's direction.
+                """
+            )
 
     standard_phase_tab, knock_phase_tab, perturbation_phase_tab = st.tabs(
         ["Standard", "Knock", "Perturbation"]

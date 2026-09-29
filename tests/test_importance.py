@@ -399,6 +399,10 @@ class ImportanceTests(unittest.TestCase):
         }
         self.assertEqual(len(charts), 4)
         self.assertEqual(charts["importance_bar_S2"]["data"][0]["x"], [-2.5])
+        self.assertTrue(
+            charts["importance_bar_S2"]["layout"]["yaxis"]["automargin"]
+        )
+        self.assertEqual(rendered.count("importance-chart-spacer"), 2)
         heatmap = charts["importance_heatmap_shapley"]["data"][0]
         self.assertEqual(heatmap["customdata"][1][0], -2.5)
         self.assertNotEqual(heatmap["z"][1][0], -2.5)

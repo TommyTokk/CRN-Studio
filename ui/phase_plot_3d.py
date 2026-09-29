@@ -489,10 +489,10 @@ def apply_scientific_scene(
         "range": [-SCENE_PADDING, 1.0 + SCENE_PADDING],
     }
     legend = {
-        "orientation": "v",
-        "x": 0.99,
-        "xanchor": "right",
-        "y": 0.98,
+        "orientation": "h",
+        "x": 0.5,
+        "xanchor": "center",
+        "y": -0.16,
         "yanchor": "top",
         "bgcolor": tokens["hover_bg"],
         "bordercolor": tokens["border"],
@@ -513,7 +513,7 @@ def apply_scientific_scene(
         plot_bgcolor=tokens["plot_area"],
         showlegend=legend_mode == "comparison",
         legend=legend,
-        height=620,
+        height=720,
         autosize=True,
         hovermode="closest",
         hoverlabel={
@@ -521,7 +521,7 @@ def apply_scientific_scene(
             "bordercolor": tokens["focus"],
             "font": {"color": tokens["text"], "size": 12},
         },
-        margin={"l": 30, "r": 30, "b": 35, "t": 70},
+        margin={"l": 55, "r": 35, "b": 150, "t": 70},
         uirevision="phase-plot-3d",
         scene={
             "xaxis": {

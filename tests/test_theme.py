@@ -212,6 +212,9 @@ class ThemeTests(unittest.TestCase):
             palette["text_soft"],
         )
         self.assertEqual(figure.layout.hoverlabel.bgcolor, palette["hover_bg"])
+        self.assertEqual(figure.layout.legend.orientation, "h")
+        self.assertLess(figure.layout.legend.y, 0)
+        self.assertGreaterEqual(figure.layout.margin.b, 150)
 
     def test_app_theme_control_switches_session_theme(self):
         """Switch the shared app shell from light to dark without exceptions.

@@ -408,6 +408,11 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                         "|log₂ ratio|",
                     )
 
+                st.markdown(
+                    '<div class="importance-chart-spacer" '
+                    'style="height:.75rem" aria-hidden="true"></div>',
+                    unsafe_allow_html=True,
+                )
                 figure = go.Figure(
                     go.Bar(
                         x=scores.tolist(),
@@ -434,7 +439,7 @@ if isinstance(result, importance.ImportanceAnalysisResult):
                 figure.update_layout(
                     title=f"Shapley — {labels.get(target, target)}",
                     xaxis_title="Shapley value (raw)",
-                    yaxis={"autorange": "reversed"},
+                    yaxis={"autorange": "reversed", "automargin": True},
                     height=max(350, 28 * len(scores) + 120),
                 )
                 apply_plotly_theme(figure)
