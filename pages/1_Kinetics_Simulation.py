@@ -16,6 +16,7 @@ from logic import experiments as exp
 from ui import phase_plot_3d as phase3d
 from ui.components import page_header, panel_heading, placeholder
 from ui.styles import apply_plotly_theme, get_theme_palette
+from ui.trajectory_hover import trajectory_chart
 
 THEME_PALETTE = get_theme_palette()
 STANDARD_GRADIENT = (THEME_PALETTE["data_1"], THEME_PALETTE["data_7"])
@@ -1409,19 +1410,10 @@ with trajectory_panel:
             xaxis_title="Time (s)",
             yaxis_title="Concentration (M)",
             legend_title="Species",
-            hovermode="x unified",
         )
         apply_plotly_theme(fig)
 
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            theme=None,
-            config={
-                "displayModeBar": True,
-                "displaylogo": False,
-            },
-        )
+        trajectory_chart(fig, "simulation_trajectory", THEME_PALETTE)
 
     else:
         placeholder(
@@ -1663,15 +1655,9 @@ with knock_panel:
             xaxis_title="Time (s)",
             yaxis_title="Concentration / amount (SBML units)",
             legend_title="Species",
-            hovermode="x unified",
         )
         apply_plotly_theme(knock_fig)
-        st.plotly_chart(
-            knock_fig,
-            use_container_width=True,
-            theme=None,
-            config={"displayModeBar": True, "displaylogo": False},
-        )
+        trajectory_chart(knock_fig, "knock_trajectory", THEME_PALETTE)
     else:
         placeholder(
             "Post-knock trajectories",
