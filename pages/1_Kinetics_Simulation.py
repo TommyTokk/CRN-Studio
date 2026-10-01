@@ -1084,6 +1084,7 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
         "perturbation_species",
         "perturbation_input_species",
         "perturbation_target_species",
+        "perturbation_saved_settings",
     ):
         st.session_state.pop(state_key, None)
     for state_key in tuple(st.session_state):
@@ -1093,6 +1094,13 @@ if st.session_state.get("kinetics_experiment_model_signature") != model_signatur
 
 # Remove the legacy value that previously fed the deleted steady-state panel.
 st.session_state.pop("simulation_steady_state", None)
+
+# Keep a separate copy because Streamlit removes page-local widget state.
+for state_key, value in st.session_state.get(
+    "perturbation_saved_settings", {}
+).items():
+    if state_key not in st.session_state:
+        st.session_state[state_key] = value
 
 
 # -----------------------------------------------------------------------------
@@ -1805,6 +1813,17 @@ with perturbation_panel:
             key="perturbation_sweep_end_time",
         )
 
+    st.session_state["perturbation_saved_settings"] = {
+        "perturbation_model_source": perturbation_model_source,
+        "perturbation_input_species": list(selected_input_species),
+        "perturbation_target_species": list(selected_target_species),
+        "perturbation_variation": perturbation_variation,
+        "perturbation_levels": perturbation_levels,
+        "perturbation_sweep_end_time": perturbation_end_time,
+        "simulation_rtol": rtol,
+        "simulation_atol": atol,
+    }
+
     combination_count = (
         int(perturbation_levels) ** len(selected_input_species)
         if selected_input_species
@@ -2004,19 +2023,29 @@ with perturbation_panel:
                 else {}
             )
 
-            target_tabs = st.tabs(
-                [
-                    _model_entity_label(
-                        species_id,
-                        "Species",
-                        (
-                            knock_modified_model
-                            if stored_sweep_source == "post-knock"
-                            else loaded_model
-                        ),
-                    )
-                    for species_id in displayed_sweep_targets
-                ]
+            if not displayed_sweep_targets:
+                st.info(
+                    "Select target species available in the cached sweep "
+                    "to display their perturbation envelopes."
+                )
+
+            target_tabs = (
+                st.tabs(
+                    [
+                        _model_entity_label(
+                            species_id,
+                            "Species",
+                            (
+                                knock_modified_model
+                                if stored_sweep_source == "post-knock"
+                                else loaded_model
+                            ),
+                        )
+                        for species_id in displayed_sweep_targets
+                    ]
+                )
+                if displayed_sweep_targets
+                else []
             )
             for target_tab, species_id in zip(
                 target_tabs,
