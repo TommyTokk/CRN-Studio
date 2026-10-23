@@ -51,6 +51,24 @@ def _sidebar_network_counts(
 def render_topbar(
     status: str = "LSODA Idle", workspace: str = "workspace: local_session"
 ) -> None:
+    """Render the solver status and active workspace in the topbar.
+
+    Parameters
+    ----------
+    status : str, default "LSODA Idle"
+        Solver status displayed in the status pill.
+    workspace : str, default "workspace: local_session"
+        Active workspace label.
+
+    Returns
+    -------
+    None
+        Render the topbar in the current Streamlit page.
+
+    Examples
+    --------
+    >>> render_topbar(workspace="WORKSPACE: example.xml")
+    """
     st.markdown(
         f"""
         <div class="topbar">
@@ -58,15 +76,47 @@ def render_topbar(
                 <span class="status-pill">↻ {escape(status)}</span>
                 <span>{escape(workspace)}</span>
             </div>
-            <div class="topbar-right">
-                <span class="topbar-link">⇩ Export Report</span>
-                <span class="topbar-link">&lt;&gt; GitHub Repo</span>
-                <span class="topbar-link">▣ Documentation</span>
-                <span class="science-chip terra">USER</span>
-            </div>
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def render_footer() -> None:
+    """Render app information, project resources, and author credit.
+
+    Returns
+    -------
+    None
+        Render the shared footer in the current Streamlit page.
+
+    Examples
+    --------
+    >>> render_footer()
+    """
+    st.html(
+        """
+        <footer class="app-footer">
+            <div class="footer-content">
+                <section aria-label="About CRN Studio">
+                    <h2 class="footer-brand">CRN Studio</h2>
+                    <p>Chemical reaction network analysis workspace</p>
+                </section>
+                <nav class="footer-links" aria-label="Project resources">
+                    <h2>Resources</h2>
+                    <a href="https://github.com/TommyTokk/CRN-Studio"
+                       target="_blank" rel="noopener noreferrer">GitHub Repo</a>
+                    <a href="https://github.com/TommyTokk/CRN-Studio/blob/main/README.md"
+                       target="_blank" rel="noopener noreferrer">Documentation</a>
+                </nav>
+                <section aria-label="App author">
+                    <h2>Authors</h2>
+                    <p>Tommaso Tocchini - University of Pisa</p>
+                    <p> Niccolò De Paolis - University of Pisa</p>
+                </section>
+            </div>
+        </footer>
+        """,
     )
 
 

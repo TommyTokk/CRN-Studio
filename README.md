@@ -462,7 +462,7 @@ Do not treat unchanged colors or a cached-result button as evidence of a new cal
 ## Current limitations
 
 - **Parameter scan** and **Scan parameter** do not perform a kinetic parameter scan. Their settings are retained and participate in standard-simulation cache matching, but are not passed as a parameter variation to the simulation engine.
-- **Download Trajectories (.csv)**, **Export Report (.pdf)**, and **Export Python Script** are disabled placeholders. There is no dedicated importance-matrix export or modified-model download in the current UI. Plotly toolbar image downloads, where available, are plot images rather than exported numerical experiment data.
+- **Download Trajectories (.csv)** and **Export Python Script** are disabled placeholders. There is no dedicated importance-matrix export or modified-model download in the current UI. Plotly toolbar image downloads, where available, are plot images rather than exported numerical experiment data.
 - The uploader advertises JSON, but the current bytes-loading path parses SBML XML.
 - Models and results are session-local, without durable project persistence.
 - The topbar's **LSODA Idle** is static; current inspected simulation paths use RoadRunner/CVODE.

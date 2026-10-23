@@ -16,13 +16,23 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ui.components import render_sidebar, render_topbar
+from ui.components import render_footer, render_sidebar, render_topbar
 from ui.model_library import ensure_model_library, get_active_model
 from ui.styles import apply_global_styles, ensure_ui_state
 
 
 def main() -> None:
-    """Render the Streamlit shell in the main application process only."""
+    """Render the shared Streamlit shell around the selected page.
+
+    Returns
+    -------
+    None
+        Render navigation, page content, and the shared footer.
+
+    Examples
+    --------
+    >>> main()  # doctest: +SKIP
+    """
     st.set_page_config(
         page_title="ShapCRN Studio",
         page_icon="🧬",
@@ -96,6 +106,7 @@ def main() -> None:
     # RUN SELECTED PAGE
     # -------------------------------------------------------------------------
     current_page.run()
+    render_footer()
 
 
 if __name__ == "__main__":

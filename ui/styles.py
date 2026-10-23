@@ -292,11 +292,17 @@ def apply_plotly_theme(figure: Figure, theme: str | None = None) -> Figure:
 def apply_global_styles() -> None:
     """Inject the design-system CSS used by every page.
 
-    Notes for future you:
-    - Streamlit owns the HTML structure, so some selectors target ``data-testid``.
-    - These selectors can occasionally change between Streamlit releases.
-    - If a Streamlit update breaks one visual rule, the scientific code is still
-      isolated from styling here.
+    Streamlit owns the HTML structure, so selectors targeting ``data-testid``
+    may need updating when Streamlit changes its markup.
+
+    Returns
+    -------
+    None
+        Inject CSS for the active theme into the current Streamlit page.
+
+    Examples
+    --------
+    >>> apply_global_styles()
     """
 
     ensure_ui_state()
@@ -428,7 +434,7 @@ def apply_global_styles() -> None:
             div[data-testid="stDecoration"],
             div[data-testid="stStatusWidget"],
             #MainMenu,
-            footer,
+            footer:not(.app-footer),
             [data-testid="viewerBadge_link__container"] {{
                 display: none !important;
             }}
@@ -441,6 +447,48 @@ def apply_global_styles() -> None:
             /* Without Streamlit's fixed header the main view should begin at y=0. */
             [data-testid="stAppViewContainer"] {{
                 padding-top: 0 !important;
+                --rail-width: 0px;
+                container-type: inline-size;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+                scrollbar-gutter: stable;
+                align-items: flex-start;
+            }}
+
+            /* One scroll surface lets the footer extend beneath the sticky rail. */
+            [data-testid="stAppViewContainer"] > div:has(> [data-testid="stMain"]) {{
+                flex: 1 1 0;
+                min-width: 0;
+                height: auto !important;
+                overflow: visible !important;
+            }}
+
+            [data-testid="stMain"] {{
+                display: flex;
+                flex-direction: column;
+                position: static !important;
+                height: auto !important;
+                min-height: 100vh;
+                min-height: 100dvh;
+                overflow: visible !important;
+            }}
+
+            .block-container[data-testid="stMainBlockContainer"] {{
+                display: flex;
+                flex-direction: column;
+                flex: 1 0 auto;
+                padding-bottom: 0 !important;
+            }}
+
+            /* Only the page root grows; nested cards retain their natural height. */
+            [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {{
+                flex: 1 0 auto;
+            }}
+
+            [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"]
+            > [data-testid="stElementContainer"]:has(> [data-testid="stHtml"] > .app-footer) {{
+                margin-top: auto;
+                padding-top: 1.5rem;
             }}
 
             [data-testid="stSidebar"] {{
@@ -641,7 +689,7 @@ def apply_global_styles() -> None:
                 letter-spacing: .035em;
             }}
 
-            .topbar-left, .topbar-right {{
+            .topbar-left {{
                 display: flex;
                 align-items: center;
                 gap: .8rem;
@@ -660,8 +708,72 @@ def apply_global_styles() -> None:
                 border: 1px solid var(--success-border);
             }}
 
-            .topbar-link {{
+            .app-footer {{
+                position: relative;
+                z-index: 2;
+                box-sizing: border-box;
+                width: 100cqw;
+                margin-left: calc(50% - 50cqw - var(--rail-width) / 2);
+                padding: 1.25rem clamp(1.25rem, 4cqw, 4rem);
+                border-top: 1px solid var(--border);
+                background: var(--surface);
                 color: var(--text-soft);
+            }}
+
+            .app-footer, .app-footer * {{
+                font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+                font-size: .875rem;
+                line-height: 1.5;
+            }}
+
+            [data-testid="stHtml"]:has(> .app-footer) {{ display: flow-root; }}
+
+            .footer-content {{
+                display: grid;
+                grid-template-columns: 2fr 1fr 1fr;
+                gap: 1.5rem;
+                max-width: 1472px;
+                margin: 0 auto;
+            }}
+
+            .footer-content > * {{ min-width: 0; }}
+
+            .app-footer h2 {{
+                margin: 0 0 .5rem;
+                font-size: .875rem !important;
+                line-height: 1.5 !important;
+                font-weight: 600;
+                letter-spacing: normal;
+            }}
+
+            .app-footer h2.footer-brand {{ font-size: 1.125rem !important; }}
+            .app-footer p {{ margin: 0; max-width: 28rem; }}
+
+            .footer-links {{
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: .25rem;
+            }}
+
+            .footer-links h2 {{ margin-bottom: .25rem; }}
+
+            .app-footer a {{
+                display: inline-flex;
+                align-items: center;
+                min-height: 24px;
+                color: var(--text-soft);
+                text-decoration: none;
+            }}
+
+            .app-footer a:hover {{
+                text-decoration: underline;
+            }}
+
+            .app-footer a:focus-visible {{
+                outline: 2px solid var(--focus);
+                outline-offset: 4px;
+                border-radius: 2px;
             }}
 
             .eyebrow {{
@@ -1277,6 +1389,7 @@ def apply_global_styles() -> None:
                disappearing after page navigation when the native header is hidden.
             */
             @media (min-width: 1024px) {{
+                [data-testid="stAppViewContainer"] {{ --rail-width: 20rem; }}
                 /* Keep the scientific control rail permanently visible on desktop.
                    Streamlit remembers a collapsed sidebar across reruns/pages; these
                    rules intentionally override that persisted collapsed geometry. */
@@ -1294,6 +1407,7 @@ def apply_global_styles() -> None:
                     max-width: 20rem !important;
                     height: 100vh !important;
                     position: sticky !important;
+                    z-index: 1 !important;
                     top: 0 !important;
                     overflow: hidden !important;
                 }}
@@ -1328,6 +1442,9 @@ def apply_global_styles() -> None:
                     padding-right: 1.25rem !important;
                 }}
                 [data-testid="stSidebar"] {{
+                    position: fixed !important;
+                    top: 0 !important;
+                    height: 100vh !important;
                     width: 18rem !important;
                     min-width: 18rem !important;
                     max-width: 18rem !important;
@@ -1357,10 +1474,16 @@ def apply_global_styles() -> None:
                     font-size: 1.75rem !important;
                     line-height: 2.25rem !important;
                 }}
-                .topbar-right {{ display:none; }}
             }}
 
             @media (max-width: 767px) {{
+                .footer-content {{
+                    grid-template-columns: 1fr;
+                    gap: 1rem;
+                }}
+
+                .app-footer {{ padding-top: 1rem; padding-bottom: 1rem; }}
+
                 .block-container {{
                     padding-top: .75rem !important;
                     padding-left: 1rem !important;

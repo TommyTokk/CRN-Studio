@@ -1102,6 +1102,15 @@ for state_key, value in st.session_state.get(
     if state_key not in st.session_state:
         st.session_state[state_key] = value
 
+for state_key, value in {
+    "simulation_rtol": 1e-6,
+    "simulation_atol": 1e-9,
+    "perturbation_variation": 20,
+    "perturbation_levels": 9,
+    "perturbation_sweep_end_time": 120.0,
+}.items():
+    st.session_state.setdefault(state_key, value)
+
 
 # -----------------------------------------------------------------------------
 # Simulation session state
@@ -1181,14 +1190,12 @@ with config:
     with c3:
         rtol = st.number_input(
             "rtol",
-            value=1e-6,
             format="%.1e",
             key="simulation_rtol",
         )
 
         atol = st.number_input(
             "atol",
-            value=1e-9,
             format="%.1e",
             key="simulation_atol",
         )
@@ -1791,7 +1798,7 @@ with perturbation_panel:
             "Variation (±%)",
             min_value=1,
             max_value=100,
-            value=20,
+            value=None,
             step=1,
             key="perturbation_variation",
         )
@@ -1800,7 +1807,7 @@ with perturbation_panel:
         perturbation_levels = st.select_slider(
             "Sweep levels",
             options=list(range(3, 22, 2)),
-            value=9,
+            value=None,
             key="perturbation_levels",
         )
 
@@ -1808,7 +1815,6 @@ with perturbation_panel:
         perturbation_end_time = st.number_input(
             "End time",
             min_value=0.01,
-            value=120.0,
             step=10.0,
             key="perturbation_sweep_end_time",
         )
@@ -2473,7 +2479,7 @@ with artifact_panel:
         "Exportable scientific outputs",
     )
 
-    buttons = st.columns(3)
+    buttons = st.columns(2)
 
     buttons[0].button(
         "⇩ Download Trajectories (.csv)",
@@ -2482,12 +2488,6 @@ with artifact_panel:
     )
 
     buttons[1].button(
-        "▧ Export Report (.pdf)",
-        disabled=True,
-        use_container_width=True,
-    )
-
-    buttons[2].button(
         "<> Export Python Script",
         disabled=True,
         use_container_width=True,
