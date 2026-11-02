@@ -101,7 +101,7 @@ Start with a small input selection and a modest number of sweep levels. Each add
 
 ### Accepted files and preparation
 
-The uploader allows `.xml` and `.sbml` filenames. **The current loading path expects UTF-8 SBML XML content.** In the inspected ShapCRN implementation, the bytes loader decodes the file and passes it directly to libSBML; it does not convert a JSON model into SBML. Ordinary JSON is therefore not a supported model representation despite the uploader label. Use an SBML XML export from your modeling tool.
+The uploader allows `.xml` and `.sbml` filenames. **The loading path expects UTF-8 SBML XML content.** JSON models are not supported. Use an SBML XML export from your modeling tool.
 
 A model must contain a valid SBML model object and pass the dependency's validation. Successful structural loading does not guarantee that every kinetic law, rule, event, or transformation is supported by the simulation and KO/KI workflows.
 
@@ -222,8 +222,6 @@ Load and inspect the active model on Overview first. In **Analysis Configuration
 | Horizon / maximum time (s) | 100 | Integer between 1 and 500; final time for ODE mode, upper time bound for steady-state mode. |
 | rtol | `1e-6` | Relative integration tolerance. |
 | atol | `1e-9` | Absolute integration tolerance. |
-| Parameter scan | Off | Present in the interface, but does not execute a parameter scan. |
-| Scan parameter | Empty | Stored configuration text; does not change a kinetic parameter. |
 
 Use finite, positive tolerances. Smaller values request tighter numerical accuracy and can increase computation time. `atol` matters especially for values close to zero. These controls set integration tolerances, not the steady-state detection threshold.
 
@@ -441,7 +439,7 @@ Do not treat unchanged colors or a cached-result button as evidence of a new cal
 | `ModuleNotFoundError` | Install requirements with the same interpreter used to launch Streamlit. Confirm that the intended environment is active. |
 | RoadRunner or libSBML cannot be imported | Confirm that ShapCRN's transitive dependencies installed successfully. Check the native-package installation error and Python/platform compatibility. |
 | The browser does not open | Headless mode is configured. Open the Local URL printed in the terminal manually. |
-| Upload fails or no valid model appears | Use UTF-8 SBML XML with a valid model object. Inspect the validation message, kinetic definitions, and reversible-reaction preparation. A `.json` extension does not enable JSON conversion. |
+| Upload fails or no valid model appears | Use UTF-8 SBML XML with a valid model object and a `.xml` or `.sbml` extension. Inspect the validation message, kinetic definitions, and reversible-reaction preparation. |
 | Kinetics appears to use an old model | Return to Overview after changing Active model, confirm the new catalog, then return to Kinetics. |
 | The canvas cannot be rendered | Check that `streamlit-cytoscape==0.2.1` is installed in the active environment and restart Streamlit. Inspect any displayed import error. |
 | No nodes match the graph filters | Lower Min degree and enable species/reaction visibility. |
@@ -461,9 +459,7 @@ Do not treat unchanged colors or a cached-result button as evidence of a new cal
 
 ## Current limitations
 
-- **Parameter scan** and **Scan parameter** do not perform a kinetic parameter scan. Their settings are retained and participate in standard-simulation cache matching, but are not passed as a parameter variation to the simulation engine.
 - **Download Trajectories (.csv)** and **Export Python Script** are disabled placeholders. There is no dedicated importance-matrix export or modified-model download in the current UI. Plotly toolbar image downloads, where available, are plot images rather than exported numerical experiment data.
-- The uploader advertises JSON, but the current bytes-loading path parses SBML XML.
 - Models and results are session-local, without durable project persistence.
 - The topbar's **LSODA Idle** is static; current inspected simulation paths use RoadRunner/CVODE.
 - Some plot labels assume seconds and molar concentration; no general unit conversion is performed.

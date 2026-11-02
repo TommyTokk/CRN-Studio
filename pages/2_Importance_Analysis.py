@@ -51,7 +51,7 @@ if source_bytes:
     except Exception as exc:  # noqa: BLE001 — surface loader failures in the page.
         model = None
         st.error(f"Unable to load the active model: {exc}")
-# Uploaded source files may be JSON; serialize the prepared model as SBML.
+# Serialize the prepared model to include transformations made during loading.
 model_bytes = (
     libsbml.writeSBMLToString(model.getSBMLDocument()).encode("utf-8")
     if model is not None

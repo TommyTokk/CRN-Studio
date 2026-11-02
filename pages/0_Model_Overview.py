@@ -453,12 +453,12 @@ upload_col, _ = st.columns([3.6, 1.25], gap="large")
 with upload_col:
     input_panel = st.container(border=True)
     with input_panel:
-        panel_heading("Upload Bio-Model", "SBML / XML / JSON", "⇧")
+        panel_heading("Upload Bio-Model", "SBML / XML", "⇧")
 
         begin_uploader_generation()
         uploaded_files = st.file_uploader(
             "Model files",
-            type=["xml", "sbml", "json"],
+            type=["xml", "sbml"],
             accept_multiple_files=True,
             key="shapcrn_model_upload_queue",
             label_visibility="collapsed",

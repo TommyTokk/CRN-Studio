@@ -221,7 +221,7 @@ def render_sidebar(
                         <span class="science-chip sage">{escape(count_label)}</span>
                     </div>
                     <div class="sidebar-file-name">▧ {shown_name}</div>
-                    <div class="sidebar-meta">Active model · SBML / XML / JSON</div>
+                    <div class="sidebar-meta">Active model · SBML / XML</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -244,7 +244,7 @@ def render_sidebar(
                         <span class="science-chip amber">Waiting</span>
                     </div>
                     <div class="sidebar-file-name">▧ No model loaded</div>
-                    <div class="sidebar-meta">SBML / XML / JSON</div>
+                    <div class="sidebar-meta">SBML / XML</div>
                 </div>
                 """,
                 unsafe_allow_html=True,

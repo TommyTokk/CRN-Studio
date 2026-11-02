@@ -1169,7 +1169,7 @@ with config:
         "⚗",
     )
 
-    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    c1, c2, c3 = st.columns(3, gap="medium")
 
     with c1:
         simulation_mode = st.selectbox(
@@ -1200,19 +1200,6 @@ with config:
             key="simulation_atol",
         )
 
-    with c4:
-        scan_enabled = st.toggle(
-            "Parameter scan",
-            value=False,
-            key="simulation_scan_enabled",
-        )
-
-        scan_note = st.text_input(
-            "Scan parameter",
-            placeholder="e.g. k_PFK",
-            key="simulation_scan_parameter",
-        )
-
     cached_simulation_config = st.session_state.get("simulation_config")
     cached_simulation_results = st.session_state.get("simulation_results")
     simulation_compute_matches = (
@@ -1220,8 +1207,6 @@ with config:
         and cached_simulation_config.get("mode") == simulation_mode
         and cached_simulation_config.get("rtol") == rtol
         and cached_simulation_config.get("atol") == atol
-        and cached_simulation_config.get("scan_enabled") == scan_enabled
-        and cached_simulation_config.get("scan_parameter") == scan_note
     )
     simulation_covered = (
         simulation_compute_matches
@@ -1274,8 +1259,6 @@ if model_loaded and run_simulation:
                 "steady_state_time": steady_state_time,
                 "rtol": rtol,
                 "atol": atol,
-                "scan_enabled": scan_enabled,
-                "scan_parameter": scan_note,
             }
             st.session_state["simulation_result_revision"] += 1
             simulation_compute_matches = True
